@@ -11,6 +11,14 @@ from src.agents.memory.prompt import (
     MEMORY_UPDATE_PROMPT,
     format_conversation_for_update,
 )
+from src.agents.memory.storage import (
+    create_empty_memory,
+    get_memory_storage,
+    get_tenant_memory_key,
+    get_user_memory_key,
+    read_memory,
+    write_memory,
+)
 from src.config.memory_config import get_memory_config
 from src.config.paths import get_paths
 from src.models import create_chat_model
@@ -382,3 +390,170 @@ def update_memory_from_conversation(messages: list[Any], thread_id: str | None =
     """
     updater = MemoryUpdater()
     return updater.update_memory(messages, thread_id, agent_name)
+
+
+def get_memory_data_with_tenant(tenant_id: str) -> dict[str, Any]:
+    """Get memory data for a specific tenant.
+
+    Args:
+        tenant_id: The tenant ID
+
+    Returns:
+        The memory data dictionary.
+    """
+    return read_memory(tenant_id)
+
+
+class TenantMemoryUpdater:
+    """Updates memory for a specific tenant using LLM."""
+
+    def __init__(self, model_name: str | None = None):
+        """Initialize the memory updater.
+
+        Args:
+            model_name: Optional model name to use. If None, uses config or default.
+        """
+        self._model_name = model_name
+
+    def _get_model(self):
+        """Get the model for memory updates."""
+        config = get_memory_config()
+        model_name = self._model_name or config.model_name
+        return create_chat_model(name=model_name, thinking_enabled=False)
+
+    def update_memory(
+        self,
+        messages: list[Any],
+        tenant_id: str,
+        thread_id: str | None = None,
+    ) -> bool:
+        """Update memory for a specific tenant.
+
+        Args:
+            messages: List of conversation messages.
+            tenant_id: The tenant ID
+            thread_id: Optional thread ID for tracking source.
+
+        Returns:
+            True if update was successful, False otherwise.
+        """
+        config = get_memory_config()
+        if not config.enabled:
+            return False
+
+        if not messages:
+            return False
+
+        try:
+            current_memory = read_memory(tenant_id)
+
+            conversation_text = format_conversation_for_update(messages)
+
+            if not conversation_text.strip():
+                return False
+
+            prompt = MEMORY_UPDATE_PROMPT.format(
+                current_memory=json.dumps(current_memory, indent=2),
+                conversation=conversation_text,
+            )
+
+            model = self._get_model()
+            response = model.invoke(prompt)
+            response_text = str(response.content).strip()
+
+            if response_text.startswith("```"):
+                lines = response_text.split("\n")
+                response_text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
+
+            update_data = json.loads(response_text)
+
+            updated_memory = self._apply_updates(current_memory, update_data, thread_id)
+
+            updated_memory = _strip_upload_mentions_from_memory(updated_memory)
+
+            return write_memory(tenant_id=tenant_id, data=updated_memory)
+
+        except json.JSONDecodeError as e:
+            print(f"Failed to parse LLM response for memory update: {e}")
+            return False
+        except Exception as e:
+            print(f"Memory update failed: {e}")
+            return False
+
+    def _apply_updates(
+        self,
+        current_memory: dict[str, Any],
+        update_data: dict[str, Any],
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply LLM-generated updates to memory."""
+        config = get_memory_config()
+        now = datetime.utcnow().isoformat() + "Z"
+
+        user_updates = update_data.get("user", {})
+        for section in ["workContext", "personalContext", "topOfMind"]:
+            section_data = user_updates.get(section, {})
+            if section_data.get("shouldUpdate") and section_data.get("summary"):
+                current_memory["user"][section] = {
+                    "summary": section_data["summary"],
+                    "updatedAt": now,
+                }
+
+        history_updates = update_data.get("history", {})
+        for section in ["recentMonths", "earlierContext", "longTermBackground"]:
+            section_data = history_updates.get(section, {})
+            if section_data.get("shouldUpdate") and section_data.get("summary"):
+                current_memory["history"][section] = {
+                    "summary": section_data["summary"],
+                    "updatedAt": now,
+                }
+
+        facts_to_remove = set(update_data.get("factsToRemove", []))
+        if facts_to_remove:
+            current_memory["facts"] = [f for f in current_memory.get("facts", []) if f.get("id") not in facts_to_remove]
+
+        new_facts = update_data.get("newFacts", [])
+        for fact in new_facts:
+            confidence = fact.get("confidence", 0.5)
+            if confidence >= config.fact_confidence_threshold:
+                fact_entry = {
+                    "id": f"fact_{uuid.uuid4().hex[:8]}",
+                    "content": fact.get("content", ""),
+                    "category": fact.get("category", "context"),
+                    "confidence": confidence,
+                    "createdAt": now,
+                    "source": thread_id or "unknown",
+                }
+                current_memory["facts"].append(fact_entry)
+
+        if len(current_memory["facts"]) > config.max_facts:
+            current_memory["facts"] = sorted(
+                current_memory["facts"],
+                key=lambda f: f.get("confidence", 0),
+                reverse=True,
+            )[: config.max_facts]
+
+        return current_memory
+
+
+def update_memory_with_tenant(
+    messages: list[Any],
+    tenant_id: str,
+    thread_id: str | None = None,
+) -> bool:
+    """Convenience function to update memory for a specific tenant.
+
+    Args:
+        messages: List of conversation messages.
+        tenant_id: The tenant ID
+        thread_id: Optional thread ID
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    updater = TenantMemoryUpdater()
+    return updater.update_memory(
+        messages=messages,
+        tenant_id=tenant_id,
+        thread_id=thread_id,
+    )

@@ -282,24 +282,31 @@ Recent breakthroughs in language models have also accelerated progress
 """
 
 
-def _get_memory_context(agent_name: str | None = None) -> str:
+def _get_memory_context(agent_name: str | None = None, tenant_id: str | None = None) -> str:
     """Get memory context for injection into system prompt.
 
     Args:
         agent_name: If provided, loads per-agent memory. If None, loads global memory.
+        tenant_id: If provided, loads tenant-specific memory.
 
     Returns:
         Formatted memory context string wrapped in XML tags, or empty string if disabled.
     """
     try:
-        from src.agents.memory import format_memory_for_injection, get_memory_data
+        from src.agents.memory import format_memory_for_injection
+        from src.agents.memory.updater import get_memory_data_with_tenant
         from src.config.memory_config import get_memory_config
 
         config = get_memory_config()
         if not config.enabled or not config.injection_enabled:
             return ""
 
-        memory_data = get_memory_data(agent_name)
+        if tenant_id is not None:
+            memory_data = get_memory_data_with_tenant(tenant_id)
+        else:
+            from src.agents.memory import get_memory_data
+            memory_data = get_memory_data(agent_name)
+
         memory_content = format_memory_for_injection(memory_data, max_tokens=config.max_injection_tokens)
 
         if not memory_content.strip():
@@ -366,9 +373,16 @@ def get_agent_soul(agent_name: str | None) -> str:
     return ""
 
 
-def apply_prompt_template(subagent_enabled: bool = False, max_concurrent_subagents: int = 3, *, agent_name: str | None = None, available_skills: set[str] | None = None) -> str:
+def apply_prompt_template(
+    subagent_enabled: bool = False,
+    max_concurrent_subagents: int = 3,
+    *,
+    agent_name: str | None = None,
+    available_skills: set[str] | None = None,
+    tenant_id: str | None = None,
+) -> str:
     # Get memory context
-    memory_context = _get_memory_context(agent_name)
+    memory_context = _get_memory_context(agent_name, tenant_id)
 
     # Include subagent section only if enabled (from runtime parameter)
     n = max_concurrent_subagents

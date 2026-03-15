@@ -17,6 +17,7 @@ class ConversationContext:
     messages: list[Any]
     timestamp: datetime = field(default_factory=datetime.utcnow)
     agent_name: str | None = None
+    tenant_id: str | None = None
 
 
 class MemoryUpdateQueue:
@@ -34,13 +35,20 @@ class MemoryUpdateQueue:
         self._timer: threading.Timer | None = None
         self._processing = False
 
-    def add(self, thread_id: str, messages: list[Any], agent_name: str | None = None) -> None:
+    def add(
+        self,
+        thread_id: str,
+        messages: list[Any],
+        agent_name: str | None = None,
+        tenant_id: str | None = None,
+    ) -> None:
         """Add a conversation to the update queue.
 
         Args:
             thread_id: The thread ID.
             messages: The conversation messages.
             agent_name: If provided, memory is stored per-agent. If None, uses global memory.
+            tenant_id: If provided, uses tenant-specific memory.
         """
         config = get_memory_config()
         if not config.enabled:
@@ -50,15 +58,13 @@ class MemoryUpdateQueue:
             thread_id=thread_id,
             messages=messages,
             agent_name=agent_name,
+            tenant_id=tenant_id,
         )
 
         with self._lock:
-            # Check if this thread already has a pending update
-            # If so, replace it with the newer one
             self._queue = [c for c in self._queue if c.thread_id != thread_id]
             self._queue.append(context)
 
-            # Reset or start the debounce timer
             self._reset_timer()
 
         print(f"Memory update queued for thread {thread_id}, queue size: {len(self._queue)}")
@@ -83,12 +89,10 @@ class MemoryUpdateQueue:
 
     def _process_queue(self) -> None:
         """Process all queued conversation contexts."""
-        # Import here to avoid circular dependency
-        from src.agents.memory.updater import MemoryUpdater
+        from src.agents.memory.updater import MemoryUpdater, TenantMemoryUpdater
 
         with self._lock:
             if self._processing:
-                # Already processing, reschedule
                 self._reset_timer()
                 return
 
@@ -103,16 +107,26 @@ class MemoryUpdateQueue:
         print(f"Processing {len(contexts_to_process)} queued memory updates")
 
         try:
-            updater = MemoryUpdater()
+            legacy_updater = MemoryUpdater()
+            tenant_updater = TenantMemoryUpdater()
 
             for context in contexts_to_process:
                 try:
                     print(f"Updating memory for thread {context.thread_id}")
-                    success = updater.update_memory(
-                        messages=context.messages,
-                        thread_id=context.thread_id,
-                        agent_name=context.agent_name,
-                    )
+
+                    if context.tenant_id is not None:
+                        success = tenant_updater.update_memory(
+                            messages=context.messages,
+                            tenant_id=context.tenant_id,
+                            thread_id=context.thread_id,
+                        )
+                    else:
+                        success = legacy_updater.update_memory(
+                            messages=context.messages,
+                            thread_id=context.thread_id,
+                            agent_name=context.agent_name,
+                        )
+
                     if success:
                         print(f"Memory updated successfully for thread {context.thread_id}")
                     else:
@@ -120,7 +134,6 @@ class MemoryUpdateQueue:
                 except Exception as e:
                     print(f"Error updating memory for thread {context.thread_id}: {e}")
 
-                # Small delay between updates to avoid rate limiting
                 if len(contexts_to_process) > 1:
                     time.sleep(0.5)
 

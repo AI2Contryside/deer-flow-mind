@@ -119,31 +119,32 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
         if not config.enabled:
             return None
 
-        # Get thread ID from runtime context
         thread_id = runtime.context.get("thread_id")
         if not thread_id:
             print("MemoryMiddleware: No thread_id in context, skipping memory update")
             return None
 
-        # Get messages from state
         messages = state.get("messages", [])
         if not messages:
             print("MemoryMiddleware: No messages in state, skipping memory update")
             return None
 
-        # Filter to only keep user inputs and final assistant responses
         filtered_messages = _filter_messages_for_memory(messages)
 
-        # Only queue if there's meaningful conversation
-        # At minimum need one user message and one assistant response
         user_messages = [m for m in filtered_messages if getattr(m, "type", None) == "human"]
         assistant_messages = [m for m in filtered_messages if getattr(m, "type", None) == "ai"]
 
         if not user_messages or not assistant_messages:
             return None
 
-        # Queue the filtered conversation for memory update
+        tenant_id = runtime.context.get("tenant_id")
+
         queue = get_memory_queue()
-        queue.add(thread_id=thread_id, messages=filtered_messages, agent_name=self._agent_name)
+        queue.add(
+            thread_id=thread_id,
+            messages=filtered_messages,
+            agent_name=self._agent_name,
+            tenant_id=tenant_id,
+        )
 
         return None

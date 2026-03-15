@@ -34,6 +34,7 @@ class InboundMessage:
         channel_name: Name of the source channel (e.g. "feishu", "slack").
         chat_id: Platform-specific chat/conversation identifier.
         user_id: Platform-specific user identifier.
+        tenant_id: Tenant identifier for multi-tenant support.
         text: The message text.
         msg_type: Whether this is a regular chat message or a command.
         thread_ts: Optional platform thread identifier (for threaded replies).
@@ -49,6 +50,7 @@ class InboundMessage:
     channel_name: str
     chat_id: str
     user_id: str
+    tenant_id: str | None = None
     text: str
     msg_type: InboundMessageType = InboundMessageType.CHAT
     thread_ts: str | None = None

@@ -167,7 +167,7 @@ class DeerFlowClient:
             Path(fd.name).unlink(missing_ok=True)
             raise
 
-    def _get_runnable_config(self, thread_id: str, **overrides) -> RunnableConfig:
+    def _get_runnable_config(self, thread_id: str, tenant_id: str | None = None, **overrides) -> RunnableConfig:
         """Build a RunnableConfig for agent invocation."""
         configurable = {
             "thread_id": thread_id,
@@ -175,13 +175,14 @@ class DeerFlowClient:
             "thinking_enabled": overrides.get("thinking_enabled", self._thinking_enabled),
             "is_plan_mode": overrides.get("plan_mode", self._plan_mode),
             "subagent_enabled": overrides.get("subagent_enabled", self._subagent_enabled),
+            "tenant_id": tenant_id,
         }
         return RunnableConfig(
             configurable=configurable,
             recursion_limit=overrides.get("recursion_limit", 100),
         )
 
-    def _ensure_agent(self, config: RunnableConfig):
+    def _ensure_agent(self, config: RunnableConfig, tenant_id: str | None = None):
         """Create (or recreate) the agent when config-dependent params change."""
         cfg = config.get("configurable", {})
         key = (
@@ -189,6 +190,7 @@ class DeerFlowClient:
             cfg.get("thinking_enabled"),
             cfg.get("is_plan_mode"),
             cfg.get("subagent_enabled"),
+            cfg.get("tenant_id"),
         )
 
         if self._agent is not None and self._agent_config_key == key:
@@ -206,6 +208,7 @@ class DeerFlowClient:
             "system_prompt": apply_prompt_template(
                 subagent_enabled=subagent_enabled,
                 max_concurrent_subagents=max_concurrent_subagents,
+                tenant_id=tenant_id,
             ),
             "state_schema": ThreadState,
         }
@@ -274,6 +277,7 @@ class DeerFlowClient:
         message: str,
         *,
         thread_id: str | None = None,
+        tenant_id: str | None = None,
         **kwargs,
     ) -> Generator[StreamEvent, None, None]:
         """Stream a conversation turn, yielding events incrementally.
@@ -289,6 +293,7 @@ class DeerFlowClient:
         Args:
             message: User message text.
             thread_id: Thread ID for conversation context. Auto-generated if None.
+            tenant_id: Tenant ID for multi-tenant memory support.
             **kwargs: Override client defaults (model_name, thinking_enabled,
                 plan_mode, subagent_enabled, recursion_limit).
 
@@ -303,11 +308,11 @@ class DeerFlowClient:
         if thread_id is None:
             thread_id = str(uuid.uuid4())
 
-        config = self._get_runnable_config(thread_id, **kwargs)
-        self._ensure_agent(config)
+        config = self._get_runnable_config(thread_id, tenant_id=tenant_id, **kwargs)
+        self._ensure_agent(config, tenant_id=tenant_id)
 
         state: dict[str, Any] = {"messages": [HumanMessage(content=message)]}
-        context = {"thread_id": thread_id}
+        context = {"thread_id": thread_id, "tenant_id": tenant_id}
 
         seen_ids: set[str] = set()
 
@@ -364,7 +369,7 @@ class DeerFlowClient:
 
         yield StreamEvent(type="end", data={})
 
-    def chat(self, message: str, *, thread_id: str | None = None, **kwargs) -> str:
+    def chat(self, message: str, *, thread_id: str | None = None, tenant_id: str | None = None, **kwargs) -> str:
         """Send a message and return the final text response.
 
         Convenience wrapper around :meth:`stream` that returns only the
@@ -375,13 +380,14 @@ class DeerFlowClient:
         Args:
             message: User message text.
             thread_id: Thread ID for conversation context. Auto-generated if None.
+            tenant_id: Tenant ID for multi-tenant memory support.
             **kwargs: Override client defaults (same as stream()).
 
         Returns:
             The last AI message text, or empty string if no response.
         """
         last_text = ""
-        for event in self.stream(message, thread_id=thread_id, **kwargs):
+        for event in self.stream(message, thread_id=thread_id, tenant_id=tenant_id, **kwargs):
             if event.type == "messages-tuple" and event.data.get("type") == "ai":
                 content = event.data.get("content", "")
                 if content:

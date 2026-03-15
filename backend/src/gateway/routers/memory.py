@@ -1,9 +1,11 @@
 """Memory API router for retrieving and managing global memory data."""
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from src.agents.memory.updater import get_memory_data, reload_memory_data
+from src.agents.memory.updater import get_memory_data, get_memory_data_with_tenant, reload_memory_data
 from src.config.memory_config import get_memory_config
 
 router = APIRouter(prefix="/api", tags=["memory"])
@@ -83,36 +85,34 @@ async def get_memory() -> MemoryResponse:
 
     Returns:
         The current memory data with user context, history, and facts.
-
-    Example Response:
-        ```json
-        {
-            "version": "1.0",
-            "lastUpdated": "2024-01-15T10:30:00Z",
-            "user": {
-                "workContext": {"summary": "Working on DeerFlow project", "updatedAt": "..."},
-                "personalContext": {"summary": "Prefers concise responses", "updatedAt": "..."},
-                "topOfMind": {"summary": "Building memory API", "updatedAt": "..."}
-            },
-            "history": {
-                "recentMonths": {"summary": "Recent development activities", "updatedAt": "..."},
-                "earlierContext": {"summary": "", "updatedAt": ""},
-                "longTermBackground": {"summary": "", "updatedAt": ""}
-            },
-            "facts": [
-                {
-                    "id": "fact_abc123",
-                    "content": "User prefers TypeScript over JavaScript",
-                    "category": "preference",
-                    "confidence": 0.9,
-                    "createdAt": "2024-01-15T10:30:00Z",
-                    "source": "thread_xyz"
-                }
-            ]
-        }
-        ```
     """
     memory_data = get_memory_data()
+    return MemoryResponse(**memory_data)
+
+
+@router.get(
+    "/memory/tenant",
+    response_model=MemoryResponse,
+    summary="Get Tenant Memory Data",
+    description="Retrieve memory data for a specific tenant. Requires X-Tenant-ID header.",
+)
+async def get_tenant_memory(
+    x_tenant_id: Annotated[str, Header()],
+) -> MemoryResponse:
+    """Get memory data for a specific tenant.
+
+    This endpoint requires X-Tenant-ID header.
+
+    Args:
+        x_tenant_id: Tenant ID from header
+
+    Returns:
+        The memory data for the specified tenant.
+
+    Raises:
+        HTTPException: If tenant_id is missing
+    """
+    memory_data = get_memory_data_with_tenant(x_tenant_id)
     return MemoryResponse(**memory_data)
 
 
@@ -146,19 +146,6 @@ async def get_memory_config_endpoint() -> MemoryConfigResponse:
 
     Returns:
         The current memory configuration settings.
-
-    Example Response:
-        ```json
-        {
-            "enabled": true,
-            "storage_path": ".deer-flow/memory.json",
-            "debounce_seconds": 30,
-            "max_facts": 100,
-            "fact_confidence_threshold": 0.7,
-            "injection_enabled": true,
-            "max_injection_tokens": 2000
-        }
-        ```
     """
     config = get_memory_config()
     return MemoryConfigResponse(

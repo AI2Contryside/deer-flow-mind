@@ -248,7 +248,7 @@ class ChannelManager:
             self._default_session.get("context"),
             channel_layer.get("context"),
             user_layer.get("context"),
-            {"thread_id": thread_id},
+            {"thread_id": thread_id, "tenant_id": msg.tenant_id},
         )
 
         return assistant_id, run_config, run_context

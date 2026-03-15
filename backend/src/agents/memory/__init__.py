@@ -20,9 +20,20 @@ from src.agents.memory.queue import (
 )
 from src.agents.memory.updater import (
     MemoryUpdater,
+    TenantMemoryUpdater,
     get_memory_data,
+    get_memory_data_with_tenant,
     reload_memory_data,
     update_memory_from_conversation,
+    update_memory_with_tenant,
+)
+from src.agents.memory.storage import (
+    FileMemoryStorage,
+    MemoryStorage,
+    get_memory_storage,
+    get_tenant_memory_key,
+    read_memory,
+    write_memory,
 )
 
 __all__ = [
@@ -38,7 +49,17 @@ __all__ = [
     "reset_memory_queue",
     # Updater
     "MemoryUpdater",
+    "TenantMemoryUpdater",
     "get_memory_data",
+    "get_memory_data_with_tenant",
     "reload_memory_data",
     "update_memory_from_conversation",
+    "update_memory_with_tenant",
+    # Storage
+    "MemoryStorage",
+    "FileMemoryStorage",
+    "get_memory_storage",
+    "get_tenant_memory_key",
+    "read_memory",
+    "write_memory",
 ]

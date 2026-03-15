@@ -35,6 +35,7 @@ DeerFlow is a LangGraph-based AI super agent with sandbox execution, persistent 
 ```
 
 **Request Routing** (via Nginx):
+
 - `/api/langgraph/*` → LangGraph Server - agent interactions, threads, streaming
 - `/api/*` (other) → Gateway API - models, MCP, skills, memory, artifacts, uploads
 - `/` (non-API) → Frontend - Next.js web interface
@@ -57,16 +58,16 @@ The single LangGraph agent (`lead_agent`) is the runtime entry point, created vi
 
 Middlewares execute in strict order, each handling a specific concern:
 
-| # | Middleware | Purpose |
-|---|-----------|---------|
-| 1 | **ThreadDataMiddleware** | Creates per-thread isolated directories (workspace, uploads, outputs) |
-| 2 | **UploadsMiddleware** | Injects newly uploaded files into conversation context |
-| 3 | **SandboxMiddleware** | Acquires sandbox environment for code execution |
-| 4 | **SummarizationMiddleware** | Reduces context when approaching token limits (optional) |
-| 5 | **TodoListMiddleware** | Tracks multi-step tasks in plan mode (optional) |
-| 6 | **TitleMiddleware** | Auto-generates conversation titles after first exchange |
-| 7 | **MemoryMiddleware** | Queues conversations for async memory extraction |
-| 8 | **ViewImageMiddleware** | Injects image data for vision-capable models (conditional) |
+| # | Middleware                        | Purpose                                                                   |
+| - | --------------------------------- | ------------------------------------------------------------------------- |
+| 1 | **ThreadDataMiddleware**    | Creates per-thread isolated directories (workspace, uploads, outputs)     |
+| 2 | **UploadsMiddleware**       | Injects newly uploaded files into conversation context                    |
+| 3 | **SandboxMiddleware**       | Acquires sandbox environment for code execution                           |
+| 4 | **SummarizationMiddleware** | Reduces context when approaching token limits (optional)                  |
+| 5 | **TodoListMiddleware**      | Tracks multi-step tasks in plan mode (optional)                           |
+| 6 | **TitleMiddleware**         | Auto-generates conversation titles after first exchange                   |
+| 7 | **MemoryMiddleware**        | Queues conversations for async memory extraction                          |
+| 8 | **ViewImageMiddleware**     | Injects image data for vision-capable models (conditional)                |
 | 9 | **ClarificationMiddleware** | Intercepts clarification requests and interrupts execution (must be last) |
 
 ### Sandbox System
@@ -101,31 +102,31 @@ LLM-powered persistent context retention across conversations:
 
 ### Tool Ecosystem
 
-| Category | Tools |
-|----------|-------|
-| **Sandbox** | `bash`, `ls`, `read_file`, `write_file`, `str_replace` |
-| **Built-in** | `present_files`, `ask_clarification`, `view_image`, `task` (subagent) |
+| Category            | Tools                                                                                     |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| **Sandbox**   | `bash`, `ls`, `read_file`, `write_file`, `str_replace`                          |
+| **Built-in**  | `present_files`, `ask_clarification`, `view_image`, `task` (subagent)             |
 | **Community** | Tavily (web search), Jina AI (web fetch), Firecrawl (scraping), DuckDuckGo (image search) |
-| **MCP** | Any Model Context Protocol server (stdio, SSE, HTTP transports) |
-| **Skills** | Domain-specific workflows injected via system prompt |
+| **MCP**       | Any Model Context Protocol server (stdio, SSE, HTTP transports)                           |
+| **Skills**    | Domain-specific workflows injected via system prompt                                      |
 
 ### Gateway API
 
 FastAPI application providing REST endpoints for frontend integration:
 
-| Route | Purpose |
-|-------|---------|
-| `GET /api/models` | List available LLM models |
-| `GET/PUT /api/mcp/config` | Manage MCP server configurations |
-| `GET/PUT /api/skills` | List and manage skills |
-| `POST /api/skills/install` | Install skill from `.skill` archive |
-| `GET /api/memory` | Retrieve memory data |
-| `POST /api/memory/reload` | Force memory reload |
-| `GET /api/memory/config` | Memory configuration |
-| `GET /api/memory/status` | Combined config + data |
-| `POST /api/threads/{id}/uploads` | Upload files (auto-converts PDF/PPT/Excel/Word to Markdown, rejects directory paths) |
-| `GET /api/threads/{id}/uploads/list` | List uploaded files |
-| `GET /api/threads/{id}/artifacts/{path}` | Serve generated artifacts |
+| Route                                      | Purpose                                                                              |
+| ------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `GET /api/models`                        | List available LLM models                                                            |
+| `GET/PUT /api/mcp/config`                | Manage MCP server configurations                                                     |
+| `GET/PUT /api/skills`                    | List and manage skills                                                               |
+| `POST /api/skills/install`               | Install skill from `.skill` archive                                                |
+| `GET /api/memory`                        | Retrieve memory data                                                                 |
+| `POST /api/memory/reload`                | Force memory reload                                                                  |
+| `GET /api/memory/config`                 | Memory configuration                                                                 |
+| `GET /api/memory/status`                 | Combined config + data                                                               |
+| `POST /api/threads/{id}/uploads`         | Upload files (auto-converts PDF/PPT/Excel/Word to Markdown, rejects directory paths) |
+| `GET /api/threads/{id}/uploads/list`     | List uploaded files                                                                  |
+| `GET /api/threads/{id}/artifacts/{path}` | Serve generated artifacts                                                            |
 
 ---
 
@@ -242,6 +243,7 @@ backend/
 Place in project root. Config values starting with `$` resolve as environment variables.
 
 Key sections:
+
 - `models` - LLM configurations with class paths, API keys, thinking/vision flags
 - `tools` - Tool definitions with module paths and groups
 - `tool_groups` - Logical tool groupings
@@ -253,6 +255,7 @@ Key sections:
 - `memory` - Memory system settings (enabled, storage, debounce, facts limits)
 
 Provider note:
+
 - `models[*].use` references provider classes by module path (for example `langchain_openai:ChatOpenAI`).
 - If a provider module is missing, DeerFlow now returns an actionable error with install guidance (for example `uv add langchain-google-genai`).
 
