@@ -12,6 +12,9 @@ RUN corepack enable && corepack install -g pnpm@10.26.2
 RUN pnpm config set store-dir ${PNPM_STORE_PATH}
 WORKDIR /app
 COPY frontend ./frontend
+# 增加代理
+RUN echo "http_proxy=http://ytb_video_dc:LID-1@spiderverse-proxy-new.bytedance.net:8080" >> /etc/environment
+RUN echo "https_proxy=http://ytb_video_dc:LID-1@spiderverse-proxy-new.bytedance.net:8080 " >> /etc/environment
 
 # ── Dev: install only, CMD is overridden by docker-compose ───────────────────
 FROM base AS dev
