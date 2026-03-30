@@ -30,7 +30,7 @@ COPY backend ./backend
 
 # Install dependencies with cache mount
 RUN --mount=type=cache,target=/root/.cache/uv \
-    sh -c "export http_proxy=http://sys-proxy-rd-relay.byted.org:8118; export https_proxy=http://sys-proxy-rd-relay.byted.org:8118; export no_proxy=.byted.org; cd backend && uv sync && uv add langgraph-checkpoint-postgres psycopg[binary] psycopg-pool"
+    sh -c "export http_proxy=http://sys-proxy-rd-relay.byted.org:8118; export https_proxy=http://sys-proxy-rd-relay.byted.org:8118; export no_proxy=.byted.org; cd backend && uv sync"
 
 # Expose ports (gateway: 8001, langgraph: 2024)
 EXPOSE 8001 2024
