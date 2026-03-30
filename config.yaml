@@ -20,7 +20,7 @@ models:
     api_key: e5147fa4c34c4702b45a9e75b8d34088.tVOVg4hHDm85a4AH # Use environment variable
     max_tokens: 4096
     temperature: 0
-    api_base: https://open.bigmodel.cn/api/paas/v4/
+    base_url: https://open.bigmodel.cn/api/paas/v4/
   
 
 # ============================================================================
