@@ -15,7 +15,6 @@ from src.agents.memory.storage import (
     create_empty_memory,
     get_memory_storage,
     get_tenant_memory_key,
-    get_user_memory_key,
     read_memory,
     write_memory,
 )
