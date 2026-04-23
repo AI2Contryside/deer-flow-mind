@@ -45,7 +45,10 @@ services:
     volumes:
       - ${DEER_FLOW_CONFIG_PATH}:/app/backend/config.yaml:ro
       - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/backend/extensions_config.json:ro
-      - ../skills:/app/skills:ro
+      # gateway needs write access for POST /api/skills/install to extract
+      # uploaded .skill archives into /app/skills/custom/. langgraph keeps
+      # its skills mount read-only (below) since it only reads skills.
+      - ../skills:/app/skills
       - ${DEER_FLOW_HOME}:/app/backend/.deer-flow
       # DooD: AioSandboxProvider starts sandbox containers via host Docker daemon
       - ${DEER_FLOW_DOCKER_SOCKET}:/var/run/docker.sock
