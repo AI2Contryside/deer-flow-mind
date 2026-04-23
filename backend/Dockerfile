@@ -4,7 +4,8 @@ FROM python:3.12-slim
 ARG NODE_MAJOR=22
 
 # Install system dependencies + Node.js (provides npx for MCP servers)
-RUN apt-get update && apt-get install -y \
+RUN export http_proxy=http://sys-proxy-rd-relay.byted.org:8118 https_proxy=http://sys-proxy-rd-relay.byted.org:8118 no_proxy=.byted.org \
+    && apt-get update && apt-get install -y \
     curl \
     build-essential \
     gnupg \
