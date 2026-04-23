@@ -8,12 +8,11 @@ We offer two development environments. **Docker is recommended** for the most co
 
 ### Option 1: Docker Development (Recommended)
 
-Docker provides a consistent, isolated environment with all dependencies pre-configured. No need to install Node.js, Python, or nginx on your local machine.
+Docker provides a consistent, isolated environment with all dependencies pre-configured. No need to install Python or nginx on your local machine.
 
 #### Prerequisites
 
 - Docker Desktop or Docker Engine
-- pnpm (for caching optimization)
 
 #### Setup Steps
 
@@ -33,9 +32,7 @@ Docker provides a consistent, isolated environment with all dependencies pre-con
    ```
    This will:
    - Build Docker images
-   - Install frontend dependencies (pnpm)
    - Install backend dependencies (uv)
-   - Share pnpm cache with host for faster builds
 
 3. **Start development services**:
    ```bash
@@ -44,12 +41,10 @@ Docker provides a consistent, isolated environment with all dependencies pre-con
    `make docker-start` reads `config.yaml` and starts `provisioner` only for provisioner/Kubernetes sandbox mode.
 
    All services will start with hot-reload enabled:
-   - Frontend changes are automatically reloaded
    - Backend changes trigger automatic restart
    - LangGraph server supports hot-reload
 
 4. **Access the application**:
-   - Web Interface: http://localhost:2026
    - API Gateway: http://localhost:2026/api/*
    - LangGraph: http://localhost:2026/api/langgraph/*
 
@@ -64,8 +59,6 @@ make docker-start
 make docker-stop
 # View Docker development logs
 make docker-logs
-# View Docker frontend logs
-make docker-logs-frontend
 # View Docker gateway logs
 make docker-logs-gateway
 ```
@@ -77,7 +70,6 @@ Host Machine
   ↓
 Docker Compose (deer-flow-dev)
   ├→ nginx (port 2026) ← Reverse proxy
-  ├→ web (port 3000) ← Frontend with hot-reload
   ├→ api (port 8001) ← Gateway API with hot-reload
    ├→ langgraph (port 2024) ← LangGraph server with hot-reload
    └→ provisioner (optional, port 8002) ← Started only in provisioner/K8s sandbox mode
@@ -85,7 +77,7 @@ Docker Compose (deer-flow-dev)
 
 **Benefits of Docker Development**:
 - ✅ Consistent environment across different machines
-- ✅ No need to install Node.js, Python, or nginx locally
+- ✅ No need to install Python or nginx locally
 - ✅ Isolated dependencies and services
 - ✅ Easy cleanup and reset
 - ✅ Hot-reload for all services
@@ -104,8 +96,6 @@ make check
 ```
 
 Required tools:
-- Node.js 22+
-- pnpm
 - uv (Python package manager)
 - nginx
 
@@ -124,7 +114,7 @@ Required tools:
    ```
 
 4. **Access the application**:
-   - Web Interface: http://localhost:2026
+   - API Gateway: http://localhost:2026/api/*
    - All API requests are automatically proxied through nginx
 
 #### Manual Service Control
@@ -140,10 +130,6 @@ If you need to start services individually:
    # Terminal 2: Start Gateway API (port 8001)
    cd backend
    make gateway
-
-   # Terminal 3: Start Frontend (port 3000)
-   cd frontend
-   pnpm dev
    ```
 
 2. **Start nginx**:
@@ -153,7 +139,7 @@ If you need to start services individually:
    ```
 
 3. **Access the application**:
-   - Web Interface: http://localhost:2026
+   - API Gateway: http://localhost:2026/api/*
 
 #### Nginx Configuration
 
@@ -161,7 +147,6 @@ The nginx configuration provides:
 - Unified entry point on port 2026
 - Routes `/api/langgraph/*` to LangGraph Server (2024)
 - Routes other `/api/*` endpoints to Gateway API (8001)
-- Routes non-API requests to Frontend (3000)
 - Centralized CORS handling
 - SSE/streaming support for real-time agent responses
 - Optimized timeouts for long-running operations
@@ -189,8 +174,6 @@ deer-flow/
 │   │   └── sandbox/        # Sandbox execution
 │   ├── docs/               # Backend documentation
 │   └── Makefile            # Backend commands
-├── frontend/               # Frontend application
-│   └── Makefile            # Frontend commands
 └── skills/                 # Agent skills
     ├── public/             # Public skills
     └── custom/             # Custom skills
@@ -199,10 +182,9 @@ deer-flow/
 ## Architecture
 
 ```
-Browser
+Client
   ↓
 Nginx (port 2026) ← Unified entry point
-  ├→ Frontend (port 3000) ← / (non-API requests)
   ├→ Gateway API (port 8001) ← /api/models, /api/mcp, /api/skills, /api/threads/*/artifacts
   └→ LangGraph Server (port 2024) ← /api/langgraph/* (agent interactions)
 ```
@@ -235,10 +217,6 @@ Nginx (port 2026) ← Unified entry point
 # Backend tests
 cd backend
 uv run pytest
-
-# Frontend tests
-cd frontend
-pnpm test
 ```
 
 ### PR Regression Checks
@@ -251,7 +229,6 @@ Every pull request runs the backend regression workflow at [.github/workflows/ba
 ## Code Style
 
 - **Backend (Python)**: We use `ruff` for linting and formatting
-- **Frontend (TypeScript)**: We use ESLint and Prettier
 
 ## Documentation
 

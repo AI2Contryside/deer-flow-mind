@@ -4,12 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DeerFlow is a LangGraph-based AI super agent system with a full-stack architecture. The backend provides a "super agent" with sandbox execution, persistent memory, subagent delegation, and extensible tool integration - all operating in per-thread isolated environments.
+DeerFlow is a LangGraph-based AI super agent system. The backend provides a "super agent" with sandbox execution, persistent memory, subagent delegation, and extensible tool integration - all operating in per-thread isolated environments.
 
 **Architecture**:
 - **LangGraph Server** (port 2024): Agent runtime and workflow execution
 - **Gateway API** (port 8001): REST API for models, MCP, skills, memory, artifacts, and uploads
-- **Frontend** (port 3000): Next.js web interface
 - **Nginx** (port 2026): Unified reverse proxy entry point
 - **Provisioner** (port 8002, optional in Docker dev): Started only when sandbox is configured for provisioner/Kubernetes mode
 
@@ -51,7 +50,6 @@ deer-flow/
 │   │   └── client.py          # Embedded Python client (DeerFlowClient)
 │   ├── tests/                 # Test suite
 │   └── docs/                  # Documentation
-├── frontend/                   # Next.js frontend application
 └── skills/                     # Agent skills directory
     ├── public/                # Public skills (committed)
     └── custom/                # Custom skills (gitignored)
@@ -73,8 +71,8 @@ When making code changes, you MUST update the relevant documentation:
 **Root directory** (for full application):
 ```bash
 make check      # Check system requirements
-make install    # Install all dependencies (frontend + backend)
-make dev        # Start all services (LangGraph + Gateway + Frontend + Nginx), with config.yaml preflight
+make install    # Install backend dependencies
+make dev        # Start all services (LangGraph + Gateway + Nginx), with config.yaml preflight
 make stop       # Stop all services
 ```
 
@@ -248,7 +246,7 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 
 Bridges external messaging platforms (Feishu, Slack, Telegram) to the DeerFlow agent via the LangGraph Server.
 
-**Architecture**: Channels communicate with the LangGraph Server through `langgraph-sdk` HTTP client (same as the frontend), ensuring threads are created and managed server-side.
+**Architecture**: Channels communicate with the LangGraph Server through the `langgraph-sdk` HTTP client, ensuring threads are created and managed server-side.
 
 **Components**:
 - `message_bus.py` - Async pub/sub hub (`InboundMessage` -> queue -> dispatcher; `OutboundMessage` -> callbacks -> channels)
@@ -386,7 +384,6 @@ This starts all services and makes the application available at `http://localhos
 **Nginx routing**:
 - `/api/langgraph/*` → LangGraph Server (2024)
 - `/api/*` (other) → Gateway API (8001)
-- `/` (non-API) → Frontend (3000)
 
 ### Running Backend Services Separately
 
@@ -403,14 +400,6 @@ make gateway
 Direct access (without nginx):
 - LangGraph: `http://localhost:2024`
 - Gateway: `http://localhost:8001`
-
-### Frontend Configuration
-
-The frontend uses environment variables to connect to backend services:
-- `NEXT_PUBLIC_LANGGRAPH_BASE_URL` - Defaults to `/api/langgraph` (through nginx)
-- `NEXT_PUBLIC_BACKEND_BASE_URL` - Defaults to empty string (through nginx)
-
-When using `make dev` from root, the frontend automatically connects through nginx.
 
 ## Key Features
 

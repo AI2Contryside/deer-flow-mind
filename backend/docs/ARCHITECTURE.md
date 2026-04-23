@@ -6,7 +6,7 @@ This document provides a comprehensive overview of the DeerFlow backend architec
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                              Client (Browser)                             │
+│                               API Client                                  │
 └─────────────────────────────────┬────────────────────────────────────────┘
                                   │
                                   ▼
@@ -16,25 +16,24 @@ This document provides a comprehensive overview of the DeerFlow backend architec
 │  ┌────────────────────────────────────────────────────────────────────┐  │
 │  │  /api/langgraph/*  →  LangGraph Server (2024)                      │  │
 │  │  /api/*            →  Gateway API (8001)                           │  │
-│  │  /*                →  Frontend (3000)                               │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────┬────────────────────────────────────────┘
                                   │
-          ┌───────────────────────┼───────────────────────┐
-          │                       │                       │
-          ▼                       ▼                       ▼
-┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
-│   LangGraph Server  │ │    Gateway API      │ │     Frontend        │
-│     (Port 2024)     │ │    (Port 8001)      │ │    (Port 3000)      │
-│                     │ │                     │ │                     │
-│  - Agent Runtime    │ │  - Models API       │ │  - Next.js App      │
-│  - Thread Mgmt      │ │  - MCP Config       │ │  - React UI         │
-│  - SSE Streaming    │ │  - Skills Mgmt      │ │  - Chat Interface   │
-│  - Checkpointing    │ │  - File Uploads     │ │                     │
-│                     │ │  - Artifacts        │ │                     │
-└─────────────────────┘ └─────────────────────┘ └─────────────────────┘
-          │                       │
-          │     ┌─────────────────┘
+          ┌───────────────────────┴───────────────────────┐
+          │                                               │
+          ▼                                               ▼
+┌─────────────────────┐                         ┌─────────────────────┐
+│   LangGraph Server  │                         │    Gateway API      │
+│     (Port 2024)     │                         │    (Port 8001)      │
+│                     │                         │                     │
+│  - Agent Runtime    │                         │  - Models API       │
+│  - Thread Mgmt      │                         │  - MCP Config       │
+│  - SSE Streaming    │                         │  - Skills Mgmt      │
+│  - Checkpointing    │                         │  - File Uploads     │
+│                     │                         │  - Artifacts        │
+└─────────────────────┘                         └─────────────────────┘
+          │                                               │
+          │     ┌─────────────────────────────────────────┘
           │     │
           ▼     ▼
 ┌──────────────────────────────────────────────────────────────────────────┐

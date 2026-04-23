@@ -20,19 +20,11 @@ for arg in "$@"; do
     esac
 done
 
-if $DEV_MODE; then
-    FRONTEND_CMD="pnpm run dev"
-else
-    FRONTEND_CMD="env BETTER_AUTH_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(16))') pnpm run preview"
-fi
-
 # ── Stop existing services ────────────────────────────────────────────────────
 
 echo "Stopping existing services if any..."
 pkill -f "langgraph dev" 2>/dev/null || true
 pkill -f "uvicorn src.gateway.app:app" 2>/dev/null || true
-pkill -f "next dev" 2>/dev/null || true
-pkill -f "next-server" 2>/dev/null || true
 nginx -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" -s quit 2>/dev/null || true
 sleep 1
 pkill -9 nginx 2>/dev/null || true
@@ -57,7 +49,6 @@ fi
 echo ""
 echo "Services starting up..."
 echo "  → Backend: LangGraph + Gateway"
-echo "  → Frontend: Next.js"
 echo "  → Nginx: Reverse Proxy"
 echo ""
 
@@ -86,8 +77,6 @@ cleanup() {
     echo "Shutting down services..."
     pkill -f "langgraph dev" 2>/dev/null || true
     pkill -f "uvicorn src.gateway.app:app" 2>/dev/null || true
-    pkill -f "next dev" 2>/dev/null || true
-    pkill -f "next start" 2>/dev/null || true
     # Kill nginx using the captured PID first (most reliable),
     # then fall back to pkill/killall for any stray nginx workers.
     if [ -n "${NGINX_PID:-}" ] && kill -0 "$NGINX_PID" 2>/dev/null; then
@@ -137,15 +126,6 @@ echo "Starting Gateway API..."
 }
 echo "✓ Gateway API started on localhost:8001"
 
-echo "Starting Frontend..."
-(cd frontend && $FRONTEND_CMD > ../logs/frontend.log 2>&1) &
-./scripts/wait-for-port.sh 3000 120 "Frontend" || {
-    echo "  See logs/frontend.log for details"
-    tail -20 logs/frontend.log
-    cleanup
-}
-echo "✓ Frontend started on localhost:3000"
-
 echo "Starting Nginx reverse proxy..."
 nginx -g 'daemon off;' -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" > logs/nginx.log 2>&1 &
 NGINX_PID=$!
@@ -174,7 +154,6 @@ echo ""
 echo "  📋 Logs:"
 echo "     - LangGraph: logs/langgraph.log"
 echo "     - Gateway:   logs/gateway.log"
-echo "     - Frontend:  logs/frontend.log"
 echo "     - Nginx:     logs/nginx.log"
 echo ""
 echo "Press Ctrl+C to stop all services"

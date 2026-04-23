@@ -160,12 +160,12 @@ Prerequisite: complete the "Configuration" steps above first (`make config` and 
 
 1. **Check prerequisites**:
    ```bash
-   make check  # Verifies Node.js 22+, pnpm, uv, nginx
+   make check  # Verifies uv, nginx
    ```
 
 2. **Install dependencies**:
    ```bash
-   make install  # Install backend + frontend dependencies
+   make install  # Install backend dependencies
    ```
 
 3. **(Optional) Pre-pull sandbox image**:

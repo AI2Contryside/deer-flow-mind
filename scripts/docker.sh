@@ -105,9 +105,9 @@ start() {
     sandbox_mode="$(detect_sandbox_mode)"
 
     if [ "$sandbox_mode" = "provisioner" ]; then
-        services="frontend gateway langgraph provisioner nginx"
+        services="gateway langgraph provisioner nginx"
     else
-        services="frontend gateway langgraph nginx"
+        services="gateway langgraph nginx"
     fi
 
     echo -e "${BLUE}Detected sandbox mode: $sandbox_mode${NC}"
@@ -179,10 +179,6 @@ logs() {
     local service=""
     
     case "$1" in
-        --frontend)
-            service="frontend"
-            echo -e "${BLUE}Viewing frontend logs...${NC}"
-            ;;
         --gateway)
             service="gateway"
             echo -e "${BLUE}Viewing gateway logs...${NC}"
@@ -200,7 +196,7 @@ logs() {
             ;;
         *)
             echo -e "${YELLOW}Unknown option: $1${NC}"
-            echo "Usage: $0 logs [--frontend|--gateway|--nginx|--provisioner]"
+            echo "Usage: $0 logs [--gateway|--nginx|--provisioner]"
             exit 1
             ;;
     esac
@@ -249,7 +245,6 @@ help() {
     echo "  start         - Start Docker services (auto-detects sandbox mode from config.yaml)"
     echo "  restart       - Restart all running Docker services"
     echo "  logs [option] - View Docker development logs"
-    echo "                  --frontend   View frontend logs only"
     echo "                  --gateway    View gateway logs only"
     echo "                  --nginx      View nginx logs only"
     echo "                  --provisioner View provisioner logs only"

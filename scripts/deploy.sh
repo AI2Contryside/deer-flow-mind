@@ -81,25 +81,6 @@ else
 fi
 
 
-# ── BETTER_AUTH_SECRET ───────────────────────────────────────────────────────
-# Required by Next.js in production. Generated once and persisted so auth
-# sessions survive container restarts.
-
-_secret_file="$DEER_FLOW_HOME/.better-auth-secret"
-if [ -z "$BETTER_AUTH_SECRET" ]; then
-    if [ -f "$_secret_file" ]; then
-        export BETTER_AUTH_SECRET
-        BETTER_AUTH_SECRET="$(cat "$_secret_file")"
-        echo -e "${GREEN}✓ BETTER_AUTH_SECRET loaded from $_secret_file${NC}"
-    else
-        export BETTER_AUTH_SECRET
-        BETTER_AUTH_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-        echo "$BETTER_AUTH_SECRET" > "$_secret_file"
-        chmod 600 "$_secret_file"
-        echo -e "${GREEN}✓ BETTER_AUTH_SECRET generated → $_secret_file${NC}"
-    fi
-fi
-
 # ── detect_sandbox_mode ───────────────────────────────────────────────────────
 
 detect_sandbox_mode() {
@@ -145,7 +126,6 @@ if [ "$CMD" = "down" ]; then
     export DEER_FLOW_EXTENSIONS_CONFIG_PATH="${DEER_FLOW_EXTENSIONS_CONFIG_PATH:-$DEER_FLOW_HOME/extensions_config.json}"
     export DEER_FLOW_DOCKER_SOCKET="${DEER_FLOW_DOCKER_SOCKET:-/var/run/docker.sock}"
     export DEER_FLOW_REPO_ROOT="${DEER_FLOW_REPO_ROOT:-$REPO_ROOT}"
-    export BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-placeholder}"
     "${COMPOSE_CMD[@]}" down
     exit 0
 fi
@@ -166,7 +146,7 @@ if [ "$sandbox_mode" = "provisioner" ]; then
     services=""
     extra_args="--profile provisioner"
 else
-    services="frontend gateway langgraph nginx"
+    services="gateway langgraph nginx"
     extra_args=""
 fi
 

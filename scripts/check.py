@@ -18,16 +18,6 @@ def run_command(command: list[str]) -> Optional[str]:
     return result.stdout.strip() or result.stderr.strip()
 
 
-def parse_node_major(version_text: str) -> Optional[int]:
-    version = version_text.strip()
-    if version.startswith("v"):
-        version = version[1:]
-    major_str = version.split(".", 1)[0]
-    if not major_str.isdigit():
-        return None
-    return int(major_str)
-
-
 def main() -> int:
     print("==========================================")
     print("  Checking Required Dependencies")
@@ -36,45 +26,6 @@ def main() -> int:
 
     failed = False
 
-    print("Checking Node.js...")
-    node_path = shutil.which("node")
-    if node_path:
-        node_version = run_command(["node", "-v"])
-        if node_version:
-            major = parse_node_major(node_version)
-            if major is not None and major >= 22:
-                print(f"  ✓ Node.js {node_version.lstrip('v')} (>= 22 required)")
-            else:
-                print(
-                    f"  ✗ Node.js {node_version.lstrip('v')} found, but version 22+ is required"
-                )
-                print("    Install from: https://nodejs.org/")
-                failed = True
-        else:
-            print("  ✗ Unable to determine Node.js version")
-            print("    Install from: https://nodejs.org/")
-            failed = True
-    else:
-        print("  ✗ Node.js not found (version 22+ required)")
-        print("    Install from: https://nodejs.org/")
-        failed = True
-
-    print()
-    print("Checking pnpm...")
-    if shutil.which("pnpm"):
-        pnpm_version = run_command(["pnpm", "-v"])
-        if pnpm_version:
-            print(f"  ✓ pnpm {pnpm_version}")
-        else:
-            print("  ✗ Unable to determine pnpm version")
-            failed = True
-    else:
-        print("  ✗ pnpm not found")
-        print("    Install: npm install -g pnpm")
-        print("    Or visit: https://pnpm.io/installation")
-        failed = True
-
-    print()
     print("Checking uv...")
     if shutil.which("uv"):
         uv_version_text = run_command(["uv", "--version"])
