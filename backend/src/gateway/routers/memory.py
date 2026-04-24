@@ -78,15 +78,27 @@ class MemoryStatusResponse(BaseModel):
     "/memory",
     response_model=MemoryResponse,
     summary="Get Memory Data",
-    description="Retrieve the current global memory data including user context, history, and facts.",
+    description=(
+        "Retrieve memory data for the tenant identified by the X-Tenant-ID "
+        "header. In single-tenant deployments the header may be omitted and "
+        "the global memory file is returned; multi-tenant deployments must "
+        "always send the header."
+    ),
 )
-async def get_memory() -> MemoryResponse:
-    """Get the current global memory data.
+async def get_memory(
+    x_tenant_id: Annotated[str | None, Header()] = None,
+) -> MemoryResponse:
+    """Get memory data. Tenant-scoped when X-Tenant-ID is present.
 
-    Returns:
-        The current memory data with user context, history, and facts.
+    The tenant header is the boundary: without it we fall back to the
+    global memory file used in single-tenant deployments. When it is
+    present we dispatch through the tenant-partitioned storage so two
+    tenants can never observe each other's facts.
     """
-    memory_data = get_memory_data()
+    if x_tenant_id:
+        memory_data = get_memory_data_with_tenant(x_tenant_id.strip())
+    else:
+        memory_data = get_memory_data()
     return MemoryResponse(**memory_data)
 
 

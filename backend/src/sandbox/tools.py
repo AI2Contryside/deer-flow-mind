@@ -232,6 +232,45 @@ def ensure_thread_directories_exist(runtime: ToolRuntime[ContextT, ThreadState] 
     runtime.state["thread_directories_created"] = True
 
 
+def _extract_erpnext_env(runtime: ToolRuntime[ContextT, ThreadState] | None) -> dict[str, str]:
+    """Pull ERPNext credentials off the runtime context and shape them as env
+    vars that the `erpnext-cli` skill expects.
+
+    Trademind's gateway puts per-user credentials into `run_context` under
+    `erpnext_credentials`: {"url", "api_key", "api_secret", "email"}. When
+    the agent calls any bash tool, we unconditionally inject ERPNEXT_URL /
+    ERPNEXT_API_KEY / ERPNEXT_API_SECRET for the child process — it's cheap,
+    non-sensitive to other skills, and avoids needing to detect whether a
+    given command happens to be the erpnext-cli launcher.
+
+    Returns an empty dict when the user hasn't been provisioned (credentials
+    not on the user row) or when the context isn't shaped as expected.
+    """
+    if runtime is None or runtime.context is None:
+        return {}
+    creds = runtime.context.get("erpnext_credentials")
+    if not isinstance(creds, dict):
+        return {}
+    url = creds.get("url")
+    api_key = creds.get("api_key")
+    api_secret = creds.get("api_secret")
+    if not (url and api_key and api_secret):
+        return {}
+    env = {
+        "ERPNEXT_URL": str(url),
+        "ERPNEXT_API_KEY": str(api_key),
+        "ERPNEXT_API_SECRET": str(api_secret),
+    }
+    # Propagate the authenticated tenant so the erpnext-cli skill can set
+    # X-Tenant-ID on every outgoing request. Without this the server-side
+    # RLS policy sees an unset tenant and returns zero rows from every
+    # tenant-scoped table.
+    tenant_id = runtime.context.get("tenant_id")
+    if tenant_id:
+        env["ERPNEXT_TENANT_ID"] = str(tenant_id)
+    return env
+
+
 @tool("bash", parse_docstring=True)
 def bash_tool(runtime: ToolRuntime[ContextT, ThreadState], description: str, command: str) -> str:
     """Execute a bash command in a Linux environment.
@@ -250,7 +289,8 @@ def bash_tool(runtime: ToolRuntime[ContextT, ThreadState], description: str, com
         if is_local_sandbox(runtime):
             thread_data = get_thread_data(runtime)
             command = replace_virtual_paths_in_command(command, thread_data)
-        return sandbox.execute_command(command)
+        env = _extract_erpnext_env(runtime) or None
+        return sandbox.execute_command(command, env=env)
     except SandboxError as e:
         return f"Error: {e}"
     except Exception as e:
