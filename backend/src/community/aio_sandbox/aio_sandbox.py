@@ -39,15 +39,26 @@ class AioSandbox(Sandbox):
             self._home_dir = context.home_dir
         return self._home_dir
 
-    def execute_command(self, command: str) -> str:
+    def execute_command(self, command: str, env: dict[str, str] | None = None) -> str:
         """Execute a shell command in the sandbox.
 
         Args:
             command: The command to execute.
+            env: Optional per-invocation environment variables. The aio shell
+                API doesn't take env natively, so we prepend `KEY=VALUE`
+                pairs to the command string — safe for typical credential
+                material (no spaces, shell-metacharacter-free) and quoted
+                defensively for anything else.
 
         Returns:
             The output of the command.
         """
+        import shlex
+
+        if env:
+            prefix = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in env.items() if v is not None)
+            if prefix:
+                command = f"{prefix} {command}"
         try:
             result = self._client.shell.exec_command(command=command)
             output = result.data.output if result.data else ""

@@ -149,9 +149,18 @@ class LocalSandbox(Sandbox):
             return shell_from_path
         raise RuntimeError("No suitable shell executable found. Tried /bin/zsh, /bin/bash, /bin/sh, and `sh` on PATH.")
 
-    def execute_command(self, command: str) -> str:
+    def execute_command(self, command: str, env: dict[str, str] | None = None) -> str:
         # Resolve container paths in command before execution
         resolved_command = self._resolve_paths_in_command(command)
+
+        # Merge per-invocation env onto the host environment. This is the
+        # injection point for per-user credentials (e.g. ERPNEXT_* vars) —
+        # the subprocess sees them, but they never touch the host process's
+        # os.environ, so concurrent threads can't cross-contaminate.
+        subprocess_env: dict[str, str] | None = None
+        if env:
+            subprocess_env = os.environ.copy()
+            subprocess_env.update({k: str(v) for k, v in env.items() if v is not None})
 
         result = subprocess.run(
             resolved_command,
@@ -160,6 +169,7 @@ class LocalSandbox(Sandbox):
             capture_output=True,
             text=True,
             timeout=600,
+            env=subprocess_env,
         )
         output = result.stdout
         if result.stderr:

@@ -1,14 +1,15 @@
 # 🦌 DeerFlow - 2.0
 
 <a href="https://trendshift.io/repositories/14699" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14699" alt="bytedance%2Fdeer-flow | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+
 > On February 28th, 2026, DeerFlow claimed the 🏆 #1 spot on GitHub Trending following the launch of version 2. Thanks a million to our incredible community — you made this happen! 💪🔥
 
 DeerFlow (**D**eep **E**xploration and **E**fficient **R**esearch **Flow**) is an open-source **super agent harness** that orchestrates **sub-agents**, **memory**, and **sandboxes** to do almost anything — powered by **extensible skills**.
 
-https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
+<https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18>
 
-> [!NOTE]
-> **DeerFlow 2.0 is a ground-up rewrite.** It shares no code with v1. If you're looking for the original Deep Research framework, it's maintained on the [`1.x` branch](https://github.com/bytedance/deer-flow/tree/main-1.x) — contributions there are still welcome. Active development has moved to 2.0.
+> \[!NOTE]
+> **DeerFlow 2.0 is a ground-up rewrite.** It shares no code with v1. If you're looking for the original Deep Research framework, it's maintained on the [`1.x`](https://github.com/bytedance/deer-flow/tree/main-1.x) [branch](https://github.com/bytedance/deer-flow/tree/main-1.x) — contributions there are still welcome. Active development has moved to 2.0.
 
 ## Official Website
 
@@ -26,7 +27,7 @@ DeerFlow has newly integrated the intelligent search and crawling toolset indepe
   />
 </a>
 
----
+***
 
 ## Table of Contents
 
@@ -45,10 +46,10 @@ DeerFlow has newly integrated the intelligent search and crawling toolset indepe
       - [IM Channels](#im-channels)
   - [From Deep Research to Super Agent Harness](#from-deep-research-to-super-agent-harness)
   - [Core Features](#core-features)
-    - [Skills \& Tools](#skills--tools)
+    - [Skills & Tools](#skills--tools)
       - [Claude Code Integration](#claude-code-integration)
     - [Sub-Agents](#sub-agents)
-    - [Sandbox \& File System](#sandbox--file-system)
+    - [Sandbox & File System](#sandbox--file-system)
     - [Context Engineering](#context-engineering)
     - [Long-Term Memory](#long-term-memory)
   - [Recommended Models](#recommended-models)
@@ -65,26 +66,20 @@ DeerFlow has newly integrated the intelligent search and crawling toolset indepe
 ### Configuration
 
 1. **Clone the DeerFlow repository**
-
    ```bash
    git clone https://github.com/bytedance/deer-flow.git
    cd deer-flow
    ```
-
 2. **Generate local configuration files**
 
    From the project root directory (`deer-flow/`), run:
-
    ```bash
    make config
    ```
-
    This command creates local configuration files based on the provided example templates.
-
 3. **Configure your preferred model(s)**
 
    Edit `config.yaml` and define at least one model:
-
    ```yaml
    models:
      - name: gpt-4                       # Internal identifier
@@ -95,35 +90,27 @@ DeerFlow has newly integrated the intelligent search and crawling toolset indepe
        max_tokens: 4096                  # Maximum tokens per request
        temperature: 0.7                  # Sampling temperature
    ```
-
-  
 4. **Set API keys for your configured model(s)**
 
    Choose one of the following methods:
 
 - Option A: Edit the `.env` file in the project root (Recommended)
-
-
-   ```bash
-   TAVILY_API_KEY=your-tavily-api-key
-   OPENAI_API_KEY=your-openai-api-key
-   # Add other provider keys as needed
-   INFOQUEST_API_KEY=your-infoquest-api-key
-   ```
-
+  ```bash
+  TAVILY_API_KEY=your-tavily-api-key
+  OPENAI_API_KEY=your-openai-api-key
+  # Add other provider keys as needed
+  INFOQUEST_API_KEY=your-infoquest-api-key
+  ```
 - Option B: Export environment variables in your shell
-
-   ```bash
-   export OPENAI_API_KEY=your-openai-api-key
-   ```
-
+  ```bash
+  export OPENAI_API_KEY=your-openai-api-key
+  ```
 - Option C: Edit `config.yaml` directly (Not recommended for production)
-
-   ```yaml
-   models:
-     - name: gpt-4
-       api_key: your-actual-api-key-here  # Replace placeholder
-   ```
+  ```yaml
+  models:
+    - name: gpt-4
+      api_key: your-actual-api-key-here  # Replace placeholder
+  ```
 
 ### Running the Application
 
@@ -145,10 +132,10 @@ make up     # Build images and start all production services
 make down   # Stop and remove containers
 ```
 
-> [!NOTE]
+> \[!NOTE]
 > The LangGraph agent server currently runs via `langgraph dev` (the open-source CLI server).
 
-Access: http://localhost:2026
+Access: <http://localhost:2026>
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed Docker development guide.
 
@@ -162,29 +149,27 @@ Prerequisite: complete the "Configuration" steps above first (`make config` and 
    ```bash
    make check  # Verifies uv, nginx
    ```
-
 2. **Install dependencies**:
    ```bash
    make install  # Install backend dependencies
    ```
-
 3. **(Optional) Pre-pull sandbox image**:
    ```bash
    # Recommended if using Docker/Container-based sandbox
    make setup-sandbox
    ```
-
 4. **Start services**:
    ```bash
    make dev
    ```
-
-5. **Access**: http://localhost:2026
+5. **Access**: <http://localhost:2026>
 
 ### Advanced
+
 #### Sandbox Mode
 
 DeerFlow supports multiple sandbox execution modes:
+
 - **Local Execution** (runs sandbox code directly on the host machine)
 - **Docker Execution** (runs sandbox code in isolated Docker containers)
 - **Docker Execution with Kubernetes** (runs sandbox code in Kubernetes pods via provisioner service)
@@ -203,13 +188,13 @@ See the [MCP Server Guide](backend/docs/MCP_SERVER.md) for detailed instructions
 
 DeerFlow supports receiving tasks from messaging apps. Channels auto-start when configured — no public IP required for any of them.
 
-| Channel | Transport | Difficulty |
-|---------|-----------|------------|
-| Telegram | Bot API (long-polling) | Easy |
-| Slack | Socket Mode | Moderate |
-| Feishu / Lark | WebSocket | Moderate |
+| Channel       | Transport              | Difficulty |
+| ------------- | ---------------------- | ---------- |
+| Telegram      | Bot API (long-polling) | Easy       |
+| Slack         | Socket Mode            | Moderate   |
+| Feishu / Lark | WebSocket              | Moderate   |
 
-**Configuration in `config.yaml`:**
+**Configuration in** **`config.yaml`:**
 
 ```yaml
 channels:
@@ -298,13 +283,13 @@ FEISHU_APP_SECRET=your_app_secret
 
 Once a channel is connected, you can interact with DeerFlow directly from the chat:
 
-| Command | Description |
-|---------|-------------|
-| `/new` | Start a new conversation |
+| Command   | Description              |
+| --------- | ------------------------ |
+| `/new`    | Start a new conversation |
 | `/status` | Show current thread info |
-| `/models` | List available models |
-| `/memory` | View memory |
-| `/help` | Show help |
+| `/models` | List available models    |
+| `/memory` | View memory              |
+| `/help`   | Show help                |
 
 > Messages without a command prefix are treated as regular chat — DeerFlow creates a thread and responds conversationally.
 
@@ -362,6 +347,7 @@ npx skills add https://github.com/bytedance/deer-flow --skill claude-to-deerflow
 Then make sure DeerFlow is running (default at `http://localhost:2026`) and use the `/claude-to-deerflow` command in Claude Code.
 
 **What you can do**:
+
 - Send messages to DeerFlow and get streaming responses
 - Choose execution modes: flash (fast), standard, pro (planning), ultra (sub-agents)
 - Check DeerFlow health, list models/skills/agents
@@ -488,4 +474,4 @@ Your unwavering commitment and expertise have been the driving force behind Deer
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=bytedance/deer-flow&type=Date)](https://star-history.com/#bytedance/deer-flow&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=bytedance/deer-flow\&type=Date)](https://star-history.com/#bytedance/deer-flow\&Date)

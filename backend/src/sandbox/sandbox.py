@@ -14,11 +14,17 @@ class Sandbox(ABC):
         return self._id
 
     @abstractmethod
-    def execute_command(self, command: str) -> str:
+    def execute_command(self, command: str, env: dict[str, str] | None = None) -> str:
         """Execute bash command in sandbox.
 
         Args:
             command: The command to execute.
+            env: Optional per-invocation environment variables. These are
+                merged on top of the sandbox's default environment; callers
+                use this to inject per-user credentials (e.g. ERPNEXT_API_KEY)
+                that must not leak across threads. Providers that can't
+                honour env natively should prepend KEY=VALUE pairs to the
+                command string.
 
         Returns:
             The standard or error output of the command.
