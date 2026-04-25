@@ -50,8 +50,8 @@ class InboundMessage:
     channel_name: str
     chat_id: str
     user_id: str
-    tenant_id: str | None = None
     text: str
+    tenant_id: str | None = None
     msg_type: InboundMessageType = InboundMessageType.CHAT
     thread_ts: str | None = None
     topic_id: str | None = None
