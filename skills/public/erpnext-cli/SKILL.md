@@ -26,21 +26,54 @@ python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json <group> <command
 > `{"ok": true, "data": ...}` on success,
 > `{"ok": false, "error": {"error": "<ClassName>", "message": "..."}}` on failure.
 
-### First-time setup
+### Authentication boot sequence (agents: do this BEFORE any business command)
 
-Either (A) log in once and cache to `~/.cli-anything-erpnext/session.json`:
+The CLI resolves credentials in this order on every call: **environment
+variables → cached session file → fail with `AuthError`**. Follow the same
+order when checking auth — do **not** ask the user to log in until you've
+ruled out env vars.
+
+**Step 1 — probe current state:**
+
+```bash
+python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json session status
+```
+
+- `ok: true` with a populated `data` → already authenticated. Note the
+  default `company` / `warehouse` / `currency` — they apply to every
+  subsequent command. Skip to your business command.
+- `ok: false` with `error.error == "AuthError"` → no usable session.
+  Continue to Step 2.
+
+**Step 2 — check environment variables before prompting the user.** The
+runner may have these injected; the CLI will pick them up automatically on
+the next command and you do **not** need to call `session login`:
+
+```bash
+env | grep -E '^ERPNEXT_(URL|API_KEY|API_SECRET|USERNAME|PASSWORD|VERIFY_SSL)='
+```
+
+Treat the auth as ready if **either**:
+- `ERPNEXT_URL` **and** (`ERPNEXT_API_KEY` + `ERPNEXT_API_SECRET`) are set, **or**
+- `ERPNEXT_URL` **and** (`ERPNEXT_USERNAME` + `ERPNEXT_PASSWORD`) are set.
+
+Re-run `session status` once to confirm — env values override the session
+file, so a previously failing `status` should now succeed.
+
+**Step 3 — only if env is also empty, ask the user** for the URL + API
+key/secret (or username/password) and then log in:
 
 ```bash
 python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json session login \
-    --url https://erp.example.com \
-    --api-key K --api-secret S --save-credentials
+    --url <URL> --api-key <K> --api-secret <S> --save-credentials
+```
 
+Optionally set defaults so subsequent commands don't need to repeat them:
+
+```bash
 python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json session set-context \
     --company "ACME Ltd" --warehouse "Stores - ACME" --currency USD
 ```
-
-Or (B) inject credentials via environment variables on each call — preferred
-for CI / agent runners so secrets never hit disk:
 
 | Env var | Purpose |
 |---------|---------|
@@ -49,7 +82,9 @@ for CI / agent runners so secrets never hit disk:
 | `ERPNEXT_USERNAME` / `ERPNEXT_PASSWORD` | Fallback user/pass auth |
 | `ERPNEXT_VERIFY_SSL` | Set to `0` to skip TLS verification |
 
-Env values **override** the session file at runtime.
+Env values **override** the session file at runtime — they are read on
+every call, so once they're present you can issue commands directly with
+no further setup.
 
 ## Command groups
 
@@ -188,7 +223,7 @@ python /mnt/skills/public/erpnext-cli/scripts/erpnext.py doc call frappe.auth.ge
 
 | `error.error` | Meaning | Agent action |
 |---------------|---------|--------------|
-| `AuthError` | Session expired / bad token | Re-run `session login` or re-inject env creds |
+| `AuthError` | Session expired / bad token / no creds | Re-run the **Authentication boot sequence** above (probe → env → login). Do not ask the user for credentials until env vars have been ruled out. |
 | `NotFoundError` | DocType / record doesn't exist | Check input names |
 | `ValidationError` | Frappe rejected the payload | Fix fields, retry |
 | `PermissionError_` | User lacks the required role | Use a different API key |
