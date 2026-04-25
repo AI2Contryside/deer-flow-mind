@@ -5,7 +5,8 @@ from typing import Annotated
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from src.agents.memory.updater import get_memory_data, get_memory_data_with_tenant, reload_memory_data
+from src.agents.memory.storage import create_empty_memory
+from src.agents.memory.updater import get_memory_data_with_tenant, reload_memory_data
 from src.config.memory_config import get_memory_config
 
 router = APIRouter(prefix="/api", tags=["memory"])
@@ -80,9 +81,9 @@ class MemoryStatusResponse(BaseModel):
     summary="Get Memory Data",
     description=(
         "Retrieve memory data for the tenant identified by the X-Tenant-ID "
-        "header. In single-tenant deployments the header may be omitted and "
-        "the global memory file is returned; multi-tenant deployments must "
-        "always send the header."
+        "header. Without the header an empty memory document is returned — "
+        "we deliberately do NOT fall back to a shared file because that "
+        "leaked one tenant's memory to another."
     ),
 )
 async def get_memory(
@@ -90,15 +91,13 @@ async def get_memory(
 ) -> MemoryResponse:
     """Get memory data. Tenant-scoped when X-Tenant-ID is present.
 
-    The tenant header is the boundary: without it we fall back to the
-    global memory file used in single-tenant deployments. When it is
-    present we dispatch through the tenant-partitioned storage so two
-    tenants can never observe each other's facts.
+    Fail-closed: if the gateway didn't forward a tenant id we return an
+    empty memory document rather than the global file. The previous
+    behaviour exposed cross-tenant data whenever the header was missing.
     """
-    if x_tenant_id:
-        memory_data = get_memory_data_with_tenant(x_tenant_id.strip())
-    else:
-        memory_data = get_memory_data()
+    if not x_tenant_id or not x_tenant_id.strip():
+        return MemoryResponse(**create_empty_memory())
+    memory_data = get_memory_data_with_tenant(x_tenant_id.strip())
     return MemoryResponse(**memory_data)
 
 
@@ -177,14 +176,20 @@ async def get_memory_config_endpoint() -> MemoryConfigResponse:
     summary="Get Memory Status",
     description="Retrieve both memory configuration and current data in a single request.",
 )
-async def get_memory_status() -> MemoryStatusResponse:
+async def get_memory_status(
+    x_tenant_id: Annotated[str | None, Header()] = None,
+) -> MemoryStatusResponse:
     """Get the memory system status including configuration and data.
 
-    Returns:
-        Combined memory configuration and current data.
+    Tenant-scoped via X-Tenant-ID, with the same fail-closed contract as
+    GET /memory: a missing header returns an empty memory document
+    instead of the shared global file.
     """
     config = get_memory_config()
-    memory_data = get_memory_data()
+    if x_tenant_id and x_tenant_id.strip():
+        memory_data = get_memory_data_with_tenant(x_tenant_id.strip())
+    else:
+        memory_data = create_empty_memory()
 
     return MemoryStatusResponse(
         config=MemoryConfigResponse(

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import threading
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -9,6 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from src.config.memory_config import get_memory_config
+
+# Tenant ids come from a trusted upstream (gateway-issued JWT claim) but are
+# interpolated directly into a filesystem path; treat them as untrusted at the
+# storage boundary and reject anything that could escape the per-tenant dir.
+_TENANT_ID_RE = re.compile(r"[A-Za-z0-9_\-]{1,64}")
 
 
 class MemoryStorage(ABC):
@@ -74,12 +80,21 @@ class FileMemoryStorage(MemoryStorage):
             base_dir: Base directory for memory files. If None, uses default.
         """
         if base_dir is None:
+            from src.config.paths import get_paths
+
+            paths_base = get_paths().base_dir
             config = get_memory_config()
             if config.storage_path:
-                base_dir = Path(config.storage_path)
+                # Honour the documented contract on MemoryConfig.storage_path:
+                # absolute paths are used as-is, relative paths are resolved
+                # against Paths.base_dir (which is the volume-mounted
+                # DEER_FLOW_HOME inside Docker). Resolving against cwd here
+                # silently dropped tenant shards into the container's writable
+                # layer, which was lost on container rebuild.
+                candidate = Path(config.storage_path)
+                base_dir = candidate if candidate.is_absolute() else paths_base / candidate
             else:
-                from src.config.paths import get_paths
-                base_dir = get_paths().base_dir / "memory"
+                base_dir = paths_base / "memory"
         self._base_dir = base_dir
         self._locks: dict[str, threading.Lock] = {}
         self._locks_lock = threading.Lock()
@@ -199,13 +214,25 @@ def set_memory_storage(storage: FileMemoryStorage) -> None:
 def get_tenant_memory_key(tenant_id: str) -> str:
     """Get the storage key for tenant memory.
 
+    The ``memory/`` segment lives in ``storage_path`` (config), not in the
+    key — otherwise we end up with ``{base}/memory/memory/{tenant}/memory.json``
+    which is what the previous layout produced inside the container.
+
     Args:
         tenant_id: The tenant ID
 
     Returns:
-        Storage key for tenant memory
+        Storage key for tenant memory: ``<tenant_id>/memory.json``.
+
+    Raises:
+        ValueError: tenant_id is empty or contains characters outside
+        ``[A-Za-z0-9_-]``. The id is interpolated into a filesystem path,
+        so anything else (``..``, ``/``, control chars) could let a caller
+        read or overwrite another tenant's memory file.
     """
-    return f"memory/{tenant_id}/memory.json"
+    if not isinstance(tenant_id, str) or not _TENANT_ID_RE.fullmatch(tenant_id):
+        raise ValueError(f"invalid tenant_id for memory key: {tenant_id!r}")
+    return f"{tenant_id}/memory.json"
 
 
 def create_empty_memory() -> dict[str, Any]:

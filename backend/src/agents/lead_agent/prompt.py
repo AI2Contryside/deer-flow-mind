@@ -287,7 +287,10 @@ def _get_memory_context(agent_name: str | None = None, tenant_id: str | None = N
 
     Args:
         agent_name: If provided, loads per-agent memory. If None, loads global memory.
-        tenant_id: If provided, loads tenant-specific memory.
+        tenant_id: Required for tenant-scoped memory injection. When None, no
+            memory is injected — we deliberately do not fall back to a shared
+            non-tenant file because that path leaked one tenant's memory into
+            another's prompt.
 
     Returns:
         Formatted memory context string wrapped in XML tags, or empty string if disabled.
@@ -301,11 +304,12 @@ def _get_memory_context(agent_name: str | None = None, tenant_id: str | None = N
         if not config.enabled or not config.injection_enabled:
             return ""
 
-        if tenant_id is not None:
-            memory_data = get_memory_data_with_tenant(tenant_id)
-        else:
-            from src.agents.memory import get_memory_data
-            memory_data = get_memory_data(agent_name)
+        if tenant_id is None:
+            # Fail closed: no tenant context means we cannot safely pick a
+            # memory file. Returning "" keeps the system prompt valid while
+            # ensuring nothing tenant-scoped leaks from a shared default.
+            return ""
+        memory_data = get_memory_data_with_tenant(tenant_id)
 
         memory_content = format_memory_for_injection(memory_data, max_tokens=config.max_injection_tokens)
 

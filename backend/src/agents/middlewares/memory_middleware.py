@@ -138,6 +138,13 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
             return None
 
         tenant_id = runtime.context.get("tenant_id")
+        if not tenant_id:
+            # Without a tenant id we'd write into the shared global memory
+            # file and effectively merge every tenant's facts together.
+            # Drop the update on the floor instead — same fail-closed posture
+            # as _get_memory_context on the read side.
+            print("MemoryMiddleware: No tenant_id in context, skipping memory update")
+            return None
 
         queue = get_memory_queue()
         queue.add(

@@ -339,7 +339,7 @@ summarization:
 # Stores user context and conversation history for personalized responses
 memory:
   enabled: true
-  storage_path: memory.json # Path relative to backend directory
+  storage_path: memory # Directory under Paths.base_dir (DEER_FLOW_HOME); holds memory/<tenant_id>/memory.json shards
   debounce_seconds: 30 # Wait time before processing queued updates
   model_name: null # Use default model
   max_facts: 100 # Maximum number of facts to store
