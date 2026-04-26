@@ -16,6 +16,7 @@ import click
 from . import __version__
 from .cli_groups import (
     accounts_group,
+    bootstrap_group,
     buying_group,
     crm_group,
     doc_group,
@@ -80,6 +81,7 @@ def cli(ctx: click.Context, json_mode: bool, session_file: str | None,
 
 
 cli.add_command(session_group.group, name="session")
+cli.add_command(bootstrap_group.group, name="bootstrap")
 cli.add_command(doc_group.group, name="doc")
 cli.add_command(selling_group.group, name="selling")
 cli.add_command(buying_group.group, name="buying")

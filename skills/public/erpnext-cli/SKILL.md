@@ -1,11 +1,10 @@
+
 ---
 name: erpnext-cli
-description: Use this skill to drive a running ERPNext / Frappe site end-to-end — quote-to-cash, procure-to-pay, material transfer, journal entries, BOM → work order → finish, lead → customer. Every domain command wraps ERPNext's native `make_*` chain methods, returns a typed JSON envelope (`{ok, data, error}`), and submits documents by default (matching what the GUI's "Create → X" button produces). Authenticate once via `session login` or env vars (`ERPNEXT_URL`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`), then issue commands from nine groups: selling, buying, stock, accounts, manufacturing, crm, hr, doc, session.
-license: Apache-2.0
+description: Use this skill to drive a running ERPNext / Frappe site end-to-end — quote-to-cash, procure-to-pay, material transfer, journal entries, BOM → work order → finish, lead → customer. Every domain command wraps ERPNext's native `make_*` chain methods, returns a typed JSON envelope (`{ok, data, error, next_actions}`), and submits documents by default (matching what the GUI's "Create → X" button produces). The harness pre-provisions credentials per tenant — agents call `session status` to verify, never `session login`. Ten command groups: bootstrap, session, selling, buying, stock, accounts, manufacturing, crm, hr, doc.
 ---
 
 # erpnext-cli
-
 A business-process CLI for ERPNext, embedded as a self-contained DeerFlow
 skill. Every command maps to a **business workflow** — the same actions a
 human accountant / sales rep / warehouse operator would take in the
@@ -22,83 +21,138 @@ The skill is mounted inside the DeerFlow sandbox at
 python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json <group> <command> [options]
 ```
 
-> **Always pass `--json`.** Agents parse stdout as a typed envelope:
+> **Always pass** **`--json`.** Agents parse stdout as a typed envelope:
 > `{"ok": true, "data": ...}` on success,
 > `{"ok": false, "error": {"error": "<ClassName>", "message": "..."}}` on failure.
 
-### Authentication boot sequence (agents: do this BEFORE any business command)
+### Authentication (harness-managed)
 
-The CLI resolves credentials in this order on every call: **environment
-variables → cached session file → fail with `AuthError`**. Follow the same
-order when checking auth — do **not** ask the user to log in until you've
-ruled out env vars.
-
-**Step 1 — probe current state:**
+**Inside the DeerFlow harness, credentials are pre-provisioned per tenant
+and injected only when this CLI launcher runs.** Agents do not see the
+URL, API key, or API secret — and must not look for them. The full auth
+flow agents need is exactly this:
 
 ```bash
 python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json session status
 ```
 
-- `ok: true` with a populated `data` → already authenticated. Note the
-  default `company` / `warehouse` / `currency` — they apply to every
-  subsequent command. Skip to your business command.
-- `ok: false` with `error.error == "AuthError"` → no usable session.
-  Continue to Step 2.
+- `ok: true` → authenticated. Note any `data.context.company` /
+  `default_warehouse` / `default_currency` defaults that apply to every
+  subsequent command. Proceed.
+- `ok: false` with `error.error == "AuthError"` → the harness did not
+  inject credentials for this tenant (the user is not provisioned).
+  **Surface this to the user and stop.** Do **not** call `session login`,
+  do **not** prompt for an API key, and do **not** retry.
 
-**Step 2 — check environment variables before prompting the user.** The
-runner may have these injected; the CLI will pick them up automatically on
-the next command and you do **not** need to call `session login`:
+**Forbidden inside the harness:**
 
-```bash
-env | grep -E '^ERPNEXT_(URL|API_KEY|API_SECRET|USERNAME|PASSWORD|VERIFY_SSL)='
-```
+- `env`, `printenv`, `echo $ERPNEXT_*` — env-var enumeration is blocked
+  by the agent prompt and would return empty regardless (the harness
+  injects credentials only into this CLI launcher, never into plain
+  bash).
+- `session login --api-key … --api-secret …` — TradeMind never surfaces
+  raw AK/SK to the agent or user; an `AuthError` means escalate, not
+  collect credentials.
+- `curl` / `requests` / `python -c "...requests..."` against any
+  back-office URL — only this CLI may talk to ERPNext.
 
-Treat the auth as ready if **either**:
-- `ERPNEXT_URL` **and** (`ERPNEXT_API_KEY` + `ERPNEXT_API_SECRET`) are set, **or**
-- `ERPNEXT_URL` **and** (`ERPNEXT_USERNAME` + `ERPNEXT_PASSWORD`) are set.
-
-Re-run `session status` once to confirm — env values override the session
-file, so a previously failing `status` should now succeed.
-
-**Step 3 — only if env is also empty, ask the user** for the URL + API
-key/secret (or username/password) and then log in:
-
-```bash
-python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json session login \
-    --url <URL> --api-key <K> --api-secret <S> --save-credentials
-```
-
-Optionally set defaults so subsequent commands don't need to repeat them:
-
-```bash
-python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json session set-context \
-    --company "ACME Ltd" --warehouse "Stores - ACME" --currency USD
-```
-
-| Env var | Purpose |
-|---------|---------|
-| `ERPNEXT_URL` | Base URL of the ERPNext site |
-| `ERPNEXT_API_KEY` / `ERPNEXT_API_SECRET` | Token auth (preferred) |
-| `ERPNEXT_USERNAME` / `ERPNEXT_PASSWORD` | Fallback user/pass auth |
-| `ERPNEXT_VERIFY_SSL` | Set to `0` to skip TLS verification |
-
-Env values **override** the session file at runtime — they are read on
-every call, so once they're present you can issue commands directly with
-no further setup.
+> **Standalone-CLI mode** (running this CLI outside the DeerFlow harness,
+> e.g. from a developer shell) supports `session login` and the
+> `ERPNEXT_*` env vars. Those paths are **not** for agent use and are
+> intentionally unreachable from the in-harness sandbox.
 
 ## Command groups
 
-| Group | Purpose | Key workflows |
-|-------|---------|---------------|
-| `session` | Auth, context defaults, history | `login`, `set-context`, `status`, `history` |
-| `selling` | Quote → cash | `order-to-cash`, `quote-to-cash`, `onboard-customer`, `deliver`, `invoice-from-delivery`, `collect-payment`, `dashboard` |
-| `buying` | Procure → pay | `procure-to-pay`, `request-to-pay`, `onboard-supplier`, `receive`, `bill-from-receipt`, `pay`, `dashboard` |
-| `stock` | Warehouse movements | `transfer`, `issue`, `receipt`, `reconcile`, `levels`, `warehouse` |
-| `accounts` | AR/AP, JEs, reconciliation | `receive-payment`, `pay`, `journal`, `reconcile`, `ar`, `ap`, `snapshot` |
-| `manufacturing` | BOM → finished goods | `bom`, `work-order`, `issue-materials`, `finish`, `make-from-bom` |
-| `crm` | Lead → customer | `lead`, `lead-to-opportunity`, `opportunity-to-quote`, `lead-to-customer`, `lead-to-quotation` |
-| `hr` | Employees, leave, attendance | `employee`, `leave`, `attendance`, `onboard` |
-| `doc` | Raw DocType CRUD (escape hatch) | `get`, `list`, `insert`, `update`, `submit`, `cancel`, `delete`, `call` |
+| Group           | Purpose                         | Key workflows                                                                                                            |
+| --------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `session`       | Auth, context defaults, history | `login`, `set-context`, `status`, `history`                                                                              |
+| `bootstrap`     | Tenant readiness probe          | `status`                                                                                                                 |
+| `selling`       | Quote → cash                    | `order-to-cash`, `quote-to-cash`, `onboard-customer`, `deliver`, `invoice-from-delivery`, `collect-payment`, `dashboard` |
+| `buying`        | Procure → pay                   | `procure-to-pay`, `request-to-pay`, `onboard-supplier`, `receive`, `bill-from-receipt`, `pay`, `dashboard`               |
+| `stock`         | Warehouse movements             | `transfer`, `issue`, `receipt`, `reconcile`, `levels`, `warehouse`                                                       |
+| `accounts`      | AR/AP, JEs, reconciliation      | `receive-payment`, `pay`, `journal`, `reconcile`, `ar`, `ap`, `snapshot`                                                 |
+| `manufacturing` | BOM → finished goods            | `bom`, `work-order`, `issue-materials`, `finish`, `make-from-bom`                                                        |
+| `crm`           | Lead → customer                 | `lead`, `lead-to-opportunity`, `opportunity-to-quote`, `lead-to-customer`, `lead-to-quotation`                           |
+| `hr`            | Employees, leave, attendance    | `employee`, `leave`, `attendance`, `onboard`                                                                             |
+| `doc`           | Raw DocType CRUD (escape hatch) | `get`, `list`, `insert`, `update`, `submit`, `cancel`, `delete`, `call`                                                  |
+
+## Pre-flight: `bootstrap status` is mandatory before any chain command
+
+A fresh ERPNext tenant has **zero master data** — no Company, no Warehouse,
+no Item, no Supplier, no Customer. Running `selling order-to-cash` /
+`buying procure-to-pay` / `stock stock-in` against an empty tenant fails
+half-way and leaves orphan records. Always probe first:
+
+```bash
+python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json bootstrap status
+```
+
+The single payload tells you in one shot:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "has_company": false,
+    "company_count": 0,
+    "default_warehouse": null,
+    "warehouse_count": 0,
+    "item_group_count": 0, "item_count": 0,
+    "supplier_count": 0, "customer_count": 0,
+    "ready_for_purchase": false,
+    "ready_for_sales":    false,
+    "ready_for_stock_in": false,
+    "missing": [
+      {"doctype": "Company",   "reason": "no record found", "blocks": ["all chains"]},
+      {"doctype": "Warehouse", "reason": "no record found", "blocks": ["stock-in", "delivery", "purchase-receipt"]}
+    ],
+    "probe_errors": {}
+  }
+}
+```
+
+Decision rules:
+
+- `ready_for_<chain>: true` → call the chain.
+- `ready_for_<chain>: false` and `missing[*].blocks` includes that chain →
+  set up the missing master first (or escalate to the user — never proceed
+  blindly).
+- `probe_errors` non-empty → upstream is unhealthy; surface the error to
+  the user and stop. Do **not** retry the same chain.
+
+## Per-DocType required fields (master setup quick reference)
+
+When `bootstrap status` says a master is missing, these are the minimal
+payloads to insert via `doc insert --doctype <X> --data '...'`. Anything
+not listed is optional with sensible Frappe defaults.
+
+| DocType            | Required fields                                                                          | Example minimal payload                                                                          |
+| ------------------ | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `Company`          | `company_name`, `abbr`, `default_currency`, `country`                                    | `{"company_name":"BIEL","abbr":"BIEL","default_currency":"CNY","country":"Hong Kong"}`           |
+| `Warehouse`        | `warehouse_name`, `company`                                                              | `{"warehouse_name":"主仓库","company":"BIEL"}`                                                      |
+| `Item Group`       | `item_group_name`, `parent_item_group`                                                   | `{"item_group_name":"围巾","parent_item_group":"All Item Groups"}`                                 |
+| `Item`             | `item_code`, `item_name`, `item_group`, `stock_uom`                                      | `{"item_code":"SCARF-001","item_name":"围巾 Style A","item_group":"围巾","stock_uom":"Pcs"}`         |
+| `Supplier`         | `supplier_name`, `supplier_group`, `supplier_type`                                       | `{"supplier_name":"NOXIA","supplier_group":"All Supplier Groups","supplier_type":"Company"}`     |
+| `Customer`         | `customer_name`, `customer_group`, `customer_type`                                       | `{"customer_name":"Alice Ltd","customer_group":"All Customer Groups","customer_type":"Company"}` |
+| `UOM`              | `uom_name`                                                                               | `{"uom_name":"Pcs"}` (usually exists already)                                                    |
+| `Currency`         | `currency_name`                                                                          | Use existing `CNY` / `USD` / `HKD`; `RMB` is **not** a Frappe code, use `CNY`.                   |
+| `Purchase Order`   | `supplier`, `company`, `schedule_date`, `items: [{item_code, qty, rate, schedule_date}]` | Prefer `buying procure-to-pay` over raw insert.                                                  |
+| `Purchase Receipt` | `supplier`, `company`, `items: [{item_code, qty, rate, warehouse, schedule_date}]`       | Prefer `buying receive --po <PO-name>` chain.                                                    |
+| `Sales Order`      | `customer`, `company`, `delivery_date`, `items: [{item_code, qty, rate, delivery_date}]` | Prefer `selling order-to-cash` over raw insert.                                                  |
+| `Sales Invoice`    | `customer`, `company`, `items: [{item_code, qty, rate}]`                                 | Prefer `selling invoice-from-delivery`.                                                          |
+| `Stock Entry`      | `stock_entry_type`, `company`, `items: [{item_code, qty, t_warehouse}]`                  | Prefer `stock receipt` / `stock issue` / `stock transfer`.                                       |
+
+Common gotchas pinned from real failures:
+
+- **Currency code** — Use `CNY` (not `RMB`), `USD`, `HKD`. Probe via
+  `doc list Currency --filter "name=CNY"` if uncertain.
+- **Country name** — Use the full English name as Frappe stores it
+  (`Hong Kong`, not `HK`). Probe via `doc list Country --limit 5`.
+- **Parent groups** — `Item Group` / `Customer Group` / `Supplier Group`
+  must reference an existing parent (`All Item Groups`, etc.); otherwise
+  Frappe returns `LinkValidationError`.
+- **`docstatus`** — Submitted docs are immutable. To "edit" a submitted
+  Sales Order, cancel + amend, do not try to update fields directly.
 
 ### Item specification (three equivalent forms)
 
@@ -188,21 +242,29 @@ python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json manufacturing ma
 
 ### 7. Raw DocType escape hatch
 
+> `--json` is mandatory in agent contexts; the examples below model what the
+> agent should emit verbatim.
+
 ```bash
-python /mnt/skills/public/erpnext-cli/scripts/erpnext.py doc list "Payment Terms Template" --limit 5
-python /mnt/skills/public/erpnext-cli/scripts/erpnext.py doc get "Company" "ACME Ltd"
-python /mnt/skills/public/erpnext-cli/scripts/erpnext.py doc call frappe.auth.get_logged_user
+python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json doc list "Payment Terms Template" --limit 5
+python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json doc get "Company" "ACME Ltd"
+python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json doc call frappe.auth.get_logged_user
 ```
+
+DOCTYPE is a **positional** argument on `doc list` / `doc get` (not
+`--doctype`). Use `--filter` (repeatable) for WHERE clauses, `--field`
+for projection, `--limit` / `--start` for pagination. `--data` is for
+`doc insert` / `doc update` only — never on `doc list`.
 
 ## Agent contract
 
-1. **Always pass `--json`.** The CLI returns `{"ok": true, "data": ...}` on
+1. **Always pass** **`--json`.** The CLI returns `{"ok": true, "data": ...}` on
    success and `{"ok": false, "error": {...}}` on failure. Parse stdout.
 2. **Exit code 0 = success.** Non-zero = failure; the `error` payload's
    `error` field names the typed exception class:
    `AuthError`, `NotFoundError`, `ValidationError`, `PermissionError_`,
    `WorkflowError`, `ServerError`, or the catch-all `ERPNextError`.
-3. **Prefer workflow commands over `doc` CRUD.** If a domain command
+3. **Prefer workflow commands over** **`doc`** **CRUD.** If a domain command
    covers your intent (`selling order-to-cash`, `buying procure-to-pay`,
    etc.), use it — it chains the right DocTypes in the right order with
    the right `make_*` helpers. Fall through to `doc` only for DocTypes
@@ -221,15 +283,21 @@ python /mnt/skills/public/erpnext-cli/scripts/erpnext.py doc call frappe.auth.ge
 
 ## Error taxonomy
 
-| `error.error` | Meaning | Agent action |
-|---------------|---------|--------------|
-| `AuthError` | Session expired / bad token / no creds | Re-run the **Authentication boot sequence** above (probe → env → login). Do not ask the user for credentials until env vars have been ruled out. |
-| `NotFoundError` | DocType / record doesn't exist | Check input names |
-| `ValidationError` | Frappe rejected the payload | Fix fields, retry |
-| `PermissionError_` | User lacks the required role | Use a different API key |
-| `WorkflowError` | Precondition failed (e.g., JE unbalanced) | Read the message and fix inputs |
-| `ServerError` | Frappe 5xx | Backoff + retry |
-| `ERPNextError` | Unclassified | Surface to the user |
+Every error envelope carries a `next_actions: [{action, reason}]` list.
+**Treat it as authoritative** — pick the first feasible action and
+follow its `reason`. Do not improvise a different recovery, and do not
+re-run the same command. The table below is a fallback summary in case
+`next_actions` is empty.
+
+| `error.error`      | Meaning                                   | Agent action                                                                                                                  |
+| ------------------ | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `AuthError`        | Harness did not inject credentials        | Surface to the user and stop. **Never** call `session login` or prompt for an API key inside the harness.                     |
+| `NotFoundError`    | DocType / record doesn't exist            | `doc list <DocType>` to confirm spelling; if the tenant is empty, run `bootstrap status` first.                               |
+| `ValidationError`  | Frappe rejected the payload               | Read `next_actions` for the missing field name; ask the user for that value rather than inventing one.                        |
+| `PermissionError_` | User lacks the required role              | Surface to the user — the agent cannot escalate its own role.                                                                 |
+| `WorkflowError`    | Precondition failed (e.g., JE unbalanced) | Read the message and fix inputs; consider `doc get` on the target record to confirm its current state before retrying.        |
+| `ServerError`      | Frappe 5xx (incl. `BrokenPipeError`)      | **Stop retrying.** Surface to the user. The fail-fast guard will abort the run after 3 consecutive 5xx anyway.                |
+| `ERPNextError`     | Unclassified                              | Surface to the user.                                                                                                          |
 
 ## Skill layout
 
@@ -242,19 +310,36 @@ erpnext-cli/
 │   └── erpnext_pkg/            # self-contained package (relative imports)
 │       ├── cli.py              # Click root group
 │       ├── core/               # FrappeClient, Session, typed errors
+│       │   ├── client.py       # low-level Frappe REST client
+│       │   ├── session.py      # session file + context defaults
+│       │   └── errors.py       # typed error classes + next_actions
 │       ├── domains/            # business-process logic (pure functions)
 │       ├── cli_groups/         # Click wrappers per domain
+│       │   ├── bootstrap_group.py   # tenant readiness probe
+│       │   ├── session_group.py     # session status / set-context / login*
+│       │   ├── doc_group.py         # raw CRUD escape hatch
+│       │   ├── selling_group.py     # quote → cash chains
+│       │   ├── buying_group.py      # procure → pay chains
+│       │   ├── stock_group.py       # warehouse movements
+│       │   ├── accounts_group.py    # AR/AP, JE, reconciliation
+│       │   ├── manufacturing_group.py
+│       │   ├── crm_group.py
+│       │   ├── hr_group.py
+│       │   └── repl_group.py        # standalone-CLI REPL (not for agents)
 │       └── utils/              # REPL skin
 └── references/
     └── ERPNEXT.md              # full catalog of ERPNext `make_*` chain methods
 ```
+
+> `*` `session login` is wired for standalone-CLI use only; in the
+> harness the `AuthError` recovery path is to escalate to the user, not
+> to log in.
 
 ## Dependencies
 
 - Python **3.10+**
 - `click`, `requests`, `prompt_toolkit` — usually already present in the
   DeerFlow sandbox. If missing, install inside the sandbox:
-
   ```bash
   pip install --quiet click requests prompt_toolkit
   ```
@@ -269,3 +354,4 @@ erpnext-cli/
 
 - Per-group help: `python /mnt/skills/public/erpnext-cli/scripts/erpnext.py <group> --help`
 - Full `make_*` catalog: `references/ERPNEXT.md`
+

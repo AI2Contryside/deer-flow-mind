@@ -31,18 +31,38 @@ def get(ctx, doctype, name):
     emit(ctx, run_safely(ctx, c.get_doc, doctype, name))
 
 
-@group.command("list")
+@group.command(
+    "list",
+    epilog=(
+        "Examples (DOCTYPE is positional, NOT --doctype):\n"
+        '  doc list Company\n'
+        '  doc list Item --limit 5 --field name --field item_group\n'
+        '  doc list "Sales Order" --filter "docstatus=1" --filter "status:in:[\\"To Deliver\\"]"\n'
+        '  doc list Customer --order-by "creation desc" --limit 10\n'
+        "\n"
+        "Common mistakes:\n"
+        "  doc list --doctype X        # WRONG — DOCTYPE is positional, drop --doctype\n"
+        "  doc list X --data {...}     # WRONG — --data is for `doc insert`, not list\n"
+        "                                use --filter / --field / --limit instead"
+    ),
+)
 @click.argument("doctype")
 @click.option("--filter", "filters", multiple=True,
-              help='Filter expressions: "field=value" or "field:op:value" '
-                   '(e.g. "docstatus=1", "status:in:[\"Open\",\"To Bill\"]")')
+              help='Filter expression (repeatable): "field=value" or '
+                   '"field:op:value" (e.g. "docstatus=1", '
+                   '"status:in:[\"Open\",\"To Bill\"]"). NOT --data.')
 @click.option("--field", "fields", multiple=True, help="Fields to fetch (repeatable).")
 @click.option("--limit", default=20, type=int)
 @click.option("--start", default=0, type=int)
 @click.option("--order-by")
 @click.pass_context
 def list_cmd(ctx, doctype, filters, fields, limit, start, order_by):
-    """List records of DOCTYPE with optional filters."""
+    """List records of DOCTYPE with optional filters.
+
+    DOCTYPE is a **positional** argument — pass it as the first token,
+    not via --doctype. Use --filter (repeatable) for WHERE clauses,
+    --field (repeatable) to project columns, --limit / --start to paginate.
+    """
     c = ctx.obj["session"].client()
     parsed = _parse_filters(filters)
     data = run_safely(
@@ -54,7 +74,20 @@ def list_cmd(ctx, doctype, filters, fields, limit, start, order_by):
     emit(ctx, data)
 
 
-@group.command("insert")
+@group.command(
+    "insert",
+    epilog=(
+        "Examples:\n"
+        '  doc insert --doctype Company --data \'{"company_name":"BIEL","abbr":"BIEL","default_currency":"CNY","country":"Hong Kong"}\'\n'
+        '  doc insert --doctype Item    --file ./item.json --submit\n'
+        '  doc insert --data \'{"doctype":"Customer","customer_name":"NOXIA"}\'  # doctype in JSON works too\n'
+        "\n"
+        "Tip: for high-frequency business flows (Sales Order, Purchase Order,\n"
+        "Quotation, Invoice, Stock Entry, ...), prefer the domain commands\n"
+        "(`selling order-to-cash`, `buying procure-to-pay`, `stock stock-in`)\n"
+        "over `doc insert` — they chain multiple DocTypes correctly in one call."
+    ),
+)
 @click.option("--doctype")
 @click.option("--file", "file_path",
               help="Path to JSON file with the full doc body.")
@@ -62,7 +95,12 @@ def list_cmd(ctx, doctype, filters, fields, limit, start, order_by):
 @click.option("--submit", is_flag=True)
 @click.pass_context
 def insert(ctx, doctype, file_path, data, submit):
-    """Insert a new document from --file or --data."""
+    """Insert a new document from --file or --data.
+
+    --data takes inline JSON. Either pass --doctype explicitly or include
+    "doctype" inside the JSON. Add --submit to also submit the document
+    after insert (idempotent for already-submitted docs).
+    """
     doc = _load_json(file_path, data)
     if doctype: doc["doctype"] = doctype
     if "doctype" not in doc:
