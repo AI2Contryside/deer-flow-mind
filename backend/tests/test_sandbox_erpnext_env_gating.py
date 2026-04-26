@@ -15,8 +15,9 @@ erpnext-cli launcher path. Everything else — ``echo``, ``env``,
 
 from __future__ import annotations
 
-import pytest
 from types import SimpleNamespace
+
+import pytest
 
 from src.sandbox.tools import _command_invokes_erpnext_cli, _extract_erpnext_env
 
@@ -41,12 +42,14 @@ _GOOD_CREDS = {
 
 @pytest.mark.unit
 def test_command_invokes_erpnext_cli_detects_launcher_path() -> None:
-    assert _command_invokes_erpnext_cli(
-        "python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json doc list Company"
-    )
-    assert _command_invokes_erpnext_cli(
-        "cd /tmp && python /mnt/skills/public/erpnext-cli/scripts/erpnext.py session status"
-    )
+    # Absolute-path form (what the SKILL.md examples model verbatim).
+    assert _command_invokes_erpnext_cli("python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json doc list Company")
+    assert _command_invokes_erpnext_cli("cd /tmp && python /mnt/skills/public/erpnext-cli/scripts/erpnext.py session status")
+    # `cd <skill> && python scripts/erpnext.py …` form — what models reach for
+    # in practice. Earlier substring-match missed this and broke thread
+    # 5093394f-…; pinned to keep the gate matching both invocation shapes.
+    assert _command_invokes_erpnext_cli("cd /mnt/skills/public/erpnext-cli && python scripts/erpnext.py --json session status")
+    assert _command_invokes_erpnext_cli("cd /mnt/skills/public/erpnext-cli && python scripts/erpnext.py --json bootstrap status 2>&1")
 
 
 @pytest.mark.unit
@@ -64,6 +67,11 @@ def test_command_invokes_erpnext_cli_rejects_envvar_probes_and_curl() -> None:
         'curl -s -H "Authorization: token $ERPNEXT_API_KEY:$ERPNEXT_API_SECRET" http://10.37.31.108:8000/api/resource/Company',
         "python -c 'import os; print(os.environ.get(\"ERPNEXT_API_KEY\"))'",
         "ls /mnt/skills/",
+        # `cd <skill> && env` — has the skill dir prefix but no `erpnext.py`
+        # token, so the new dir+filename gate must still reject it. Without
+        # this guard a model could `cd` into the skill dir and exfiltrate.
+        "cd /mnt/skills/public/erpnext-cli && env",
+        "cd /mnt/skills/public/erpnext-cli && cat README.md",
     ):
         assert not _command_invokes_erpnext_cli(cmd), f"unexpected match for: {cmd}"
 

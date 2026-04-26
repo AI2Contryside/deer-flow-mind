@@ -131,16 +131,42 @@ research on suppliers / regulations, and non-trade requests — use general capa
 If the skill is not installed, say so, draft a structured artifact the user can paste into ERPNext, and recommend
 enabling it.
 
-**WORKFLOW — always do this first:**
+**AUTHENTICATION IS HARNESS-MANAGED — do NOT look for connection info.**
 
-Before invoking any chain command (`selling order-to-cash`, `buying procure-to-pay`,
-`stock stock-in`, `manufacturing make-...`, etc.), run **`bootstrap status`** once
-and read the result. The single payload tells you whether the tenant has a Company,
-default Warehouse, Item Group, Item, Supplier, Customer, and which chains are
-ready (`ready_for_purchase`, `ready_for_sales`, `ready_for_stock_in`). If a
-required master is missing, set it up first or escalate to the user — do not
-charge into a chain that is guaranteed to fail half-way (this is exactly how
-session b987fdbe-... burned 84 wasted steps).
+The per-tenant ERPNext URL, API key, API secret, and `X-Tenant-ID` are
+pre-injected into the `erpnext-cli` launcher subprocess by the runtime.
+You will never see them, and the user does not need to provide them. Trying
+to discover them via `env`, `printenv`, `echo $ERPNEXT_*`,
+`cat ~/.erpnext/credentials`, `cat .env`, or any `curl` against a back-office
+URL returns empty / zero rows — these paths are not a fallback, they are
+documented dead ends. **Just invoke the CLI; auth happens transparently.**
+
+If `session status` or any other CLI call returns
+`{{"ok": false, "error": {{"error": "AuthError", ...}}}}`, the tenant is not
+provisioned. Surface the error verbatim to the user and stop. **Do NOT** call
+`session login`, **do NOT** ask the user for an API key / API secret / URL,
+and **do NOT** retry. Asking the user for credentials is a contract violation
+(observed in thread 5093394f-…, where the agent walked the user through
+URL+API-key prompts even though the harness had injected creds the whole
+time).
+
+**WORKFLOW — always do this first, in this order:**
+
+1. **`session status`** — verify auth. `ok: true` with a non-null `data.url` /
+   `data.api_key` means the harness has injected credentials and you are
+   authenticated; proceed. `ok: false` with `AuthError` → escalate per the
+   rule above. Do not run `session ping` instead — `session status` is the
+   contract command and reflects env-injected creds.
+2. **`bootstrap status`** — before invoking any chain command, verify the
+   tenant has the masters this chain needs. The single payload tells you
+   whether the tenant has a Company, default Warehouse, Item Group, Item,
+   Supplier, Customer, and which chains are ready (`ready_for_purchase`,
+   `ready_for_sales`, `ready_for_stock_in`). If a required master is
+   missing, set it up first or escalate to the user — do not charge into a
+   chain that is guaranteed to fail half-way (this is exactly how session
+   b987fdbe-... burned 84 wasted steps).
+3. **The chain command** (`selling order-to-cash`, `buying procure-to-pay`,
+   `stock stock-in`, `manufacturing make-...`, etc.).
 
 When an `erpnext-cli` error envelope contains a `next_actions` array, treat it as
 authoritative: pick the first feasible action and follow its `reason`. Do not
@@ -320,20 +346,10 @@ def apply_prompt_template(
     subagent_section = _build_subagent_section(n) if subagent_enabled else ""
 
     # Add subagent reminder to critical_reminders if enabled
-    subagent_reminder = (
-        f"- Subagent mode: decompose into independent sub-tasks, launch up to {n} `task` calls per turn (excess is "
-        f"discarded), synthesize results at the end.\n"
-        if subagent_enabled
-        else ""
-    )
+    subagent_reminder = f"- Subagent mode: decompose into independent sub-tasks, launch up to {n} `task` calls per turn (excess is discarded), synthesize results at the end.\n" if subagent_enabled else ""
 
     # Add subagent thinking guidance if enabled
-    subagent_thinking = (
-        f"- If the task decomposes into 2+ independent sub-tasks, count them — launch up to {n} this turn and queue "
-        f"the rest for the next turn.\n"
-        if subagent_enabled
-        else ""
-    )
+    subagent_thinking = f"- If the task decomposes into 2+ independent sub-tasks, count them — launch up to {n} this turn and queue the rest for the next turn.\n" if subagent_enabled else ""
 
     # Get skills section
     skills_section = get_skills_prompt_section(available_skills)

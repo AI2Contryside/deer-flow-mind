@@ -238,15 +238,29 @@ def ensure_thread_directories_exist(runtime: ToolRuntime[ContextT, ThreadState] 
 # environment, which is what we want after session b987fdbe-... where the
 # agent leaked ``ERPNEXT_API_KEY`` / ``ERPNEXT_API_SECRET`` straight to
 # chat and used the same values to drive raw curl bypassing the skill.
-_ERPNEXT_CLI_LAUNCHER_HINT = "/mnt/skills/public/erpnext-cli/scripts/erpnext.py"
+# Match the skill dir prefix as a *boundary* token: it must be followed by
+# `/`, whitespace, `&`, `;`, end-of-string, or a quote/closing paren so that
+# `/mnt/skills/public/erpnext-cli-other` (a hypothetical sibling) doesn't get
+# silently treated as the same skill.
+_ERPNEXT_CLI_DIR_RE = re.compile(r"/mnt/skills/public/erpnext-cli(?=/|\s|$|[&;'\"|)])")
+_ERPNEXT_CLI_LAUNCHER_FILENAME = "erpnext.py"
 
 
 def _command_invokes_erpnext_cli(command: str) -> bool:
     """Return True iff the bash command line will execute the erpnext-cli
-    launcher. We match on the literal launcher path so that a request like
-    ``python /mnt/skills/public/erpnext-cli/scripts/erpnext.py doc list …``
-    gets the env, while ``echo $ERPNEXT_API_KEY``, ``env``, ``printenv``,
-    ``curl …``, or any ad-hoc ``python -c`` does not.
+    launcher. Models reach the launcher via two equivalent forms:
+
+      ``python /mnt/skills/public/erpnext-cli/scripts/erpnext.py doc list …``
+      ``cd /mnt/skills/public/erpnext-cli && python scripts/erpnext.py doc list …``
+
+    The earlier substring match required the full absolute launcher path in
+    one piece, so the second form silently missed the gate (no env injected,
+    CLI saw an empty environment, agent assumed "not configured" and asked
+    the user for credentials in violation of the system prompt — observed in
+    thread 5093394f-…). Match on dir prefix + launcher filename so both forms
+    trigger, while plain bash like ``echo $ERPNEXT_API_KEY``, ``env``,
+    ``printenv``, ``curl …``, or ``cd /mnt/skills/public/erpnext-cli && env``
+    still does not (no ``erpnext.py`` token).
 
     This is a coarse gate, not a sandbox boundary — the prompt and other
     layers carry the real "no raw HTTP" rule. The gate only ensures the
@@ -254,7 +268,7 @@ def _command_invokes_erpnext_cli(command: str) -> bool:
     """
     if not command:
         return False
-    return _ERPNEXT_CLI_LAUNCHER_HINT in command
+    return bool(_ERPNEXT_CLI_DIR_RE.search(command)) and _ERPNEXT_CLI_LAUNCHER_FILENAME in command
 
 
 def _extract_erpnext_env(
@@ -354,15 +368,17 @@ def ls_tool(runtime: ToolRuntime[ContextT, ThreadState], description: str, path:
         return f"Error: Unexpected error listing directory: {type(e).__name__}: {e}"
 
 
-# Skill manifests are already injected into the system prompt by the skills
-# loader, so re-reading them as a tool call duplicates 5-15K tokens of context
-# for zero new information. Pattern matches both virtual (/mnt/skills/...) and
-# host-translated paths (anything ending in `/skills/<group>/<name>/SKILL.md`).
-_SKILL_MANIFEST_PATTERN = re.compile(r"(^|/)skills/[^/]+/[^/]+/SKILL\.md$", re.IGNORECASE)
-
-
-def _is_skill_manifest(path: str) -> bool:
-    return bool(_SKILL_MANIFEST_PATTERN.search(path or ""))
+# NOTE: An earlier short-circuit refused to read ``SKILL.md`` and replied
+# "Skill manifest already loaded in the system prompt — no need to re-read it."
+# That message was a lie: the skills loader only injects each manifest's YAML
+# frontmatter (``name``, ``description``, ``location``) into the system prompt
+# — never the body. Agents that obeyed ``<skill_system>``'s "read_file the
+# skill's main file" instruction were rejected with a fabricated reason and
+# fell back to scraping README / running ``env`` to discover auth — exactly
+# the failure observed in thread 5093394f-…, which ended with the agent asking
+# the user for an API key in violation of the trade hard rules. Removed.
+# If SKILL.md re-reads later prove to be a real context-bloat problem, fix it
+# with a per-thread dedup cache rather than by lying about what's in context.
 
 
 @tool("read_file", parse_docstring=True)
@@ -381,12 +397,6 @@ def read_file_tool(
         start_line: Optional starting line number (1-indexed, inclusive). Use with end_line to read a specific range.
         end_line: Optional ending line number (1-indexed, inclusive). Use with start_line to read a specific range.
     """
-    if _is_skill_manifest(path):
-        return (
-            "Skill manifest already loaded in the system prompt — no need to re-read it. "
-            "If you need to inspect the skill's runtime files (e.g. scripts/), point this tool "
-            "at those concrete paths instead of SKILL.md."
-        )
     try:
         sandbox = ensure_sandbox_initialized(runtime)
         ensure_thread_directories_exist(runtime)
