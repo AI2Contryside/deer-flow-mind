@@ -230,36 +230,26 @@ summarization:
 
   # Trigger conditions - at least one required
   # Summarization runs when ANY threshold is met (OR logic)
-  # You can specify a single trigger or a list of triggers
   #
-  # NOTE (tuned 2026-04-26): bumped from tokens:15564 to fraction:0.7 because
-  # the ERPNext multi-step flow (xlsx parse → SKILL.md read → many bash calls)
-  # legitimately accumulates ~30-40K chars of tool output before any real work
-  # happens. Firing summarization at 15K caused a "summarize → re-explore →
-  # summarize again" loop that ate the LangGraph recursion budget.
+  # IMPORTANT: `type: fraction` requires the model to expose a profile with
+  # max_input_tokens (LangChain SummarizationMiddleware enforces this). Our
+  # DeepSeek factory does not, so fraction triggers crash make_lead_agent at
+  # init time. Stick to absolute tokens / messages until model profiles are
+  # wired up in src/models/factory.py.
+  #
+  # 40000 ≈ 62% of DeepSeek-v4-flash's 64K window — late enough that the
+  # ERPNext flow (xlsx parse + SKILL.md + bash calls) doesn't summarize
+  # mid-task, early enough to leave headroom for the next turn.
   trigger:
-    - type: fraction
-      value: 0.7
-    # Alternatives kept for reference:
-    # - type: tokens
-    #   value: 15564
-    # - type: messages
-    #   value: 50
+    - type: tokens
+      value: 40000
 
-  # Context retention policy after summarization
-  # Specifies how much recent history to preserve
-  #
-  # Switched from messages:10 → tokens:8000 so the keep window adapts to message
-  # size. With tool-heavy turns a single tool_result can be 10K+ chars; counting
-  # by message conflates "10 short pings" with "10 huge JSON dumps".
+  # Context retention policy after summarization. Token-based so a turn full of
+  # tiny tool pings doesn't get treated the same as a turn full of huge JSON
+  # tool_results.
   keep:
     type: tokens
     value: 8000
-    # Alternatives:
-    # type: messages
-    # value: 10
-    # type: fraction
-    # value: 0.3
 
   # Maximum tokens to keep when preparing messages for summarization
   # Set to null to skip trimming (not recommended for very long conversations)
