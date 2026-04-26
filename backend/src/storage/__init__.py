@@ -8,6 +8,7 @@ from src.storage.keys import (
     sanitize_filename,
     short_uuid,
     tenant_prefix,
+    tenant_profile_usage_log_key,
     thread_upload_key,
     user_prefix,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "set_default",
     "short_uuid",
     "tenant_prefix",
+    "tenant_profile_usage_log_key",
     "thread_upload_key",
     "user_prefix",
 ]
