@@ -6,6 +6,21 @@ from pathlib import Path
 from src.sandbox.local.list_dir import list_dir
 from src.sandbox.sandbox import Sandbox
 
+# Defense-in-depth: never let the sandboxed bash subprocess inherit these
+# credential vars from the langgraph host process — only the explicit
+# per-call ``env`` injection in ``tools._extract_erpnext_env`` is allowed
+# to set them. Observed in thread 5093394f-… : agent ran
+# ``echo "ERPNEXT_API_KEY set: $([ -n "$ERPNEXT_API_KEY" ] && echo yes ...)"``
+# (a command the gate correctly returned ``{}`` for) and bash still printed
+# "yes" because the parent process's ``os.environ`` carried the value through
+# ``subprocess.run(env=None)``. The gate is one layer; this is the second.
+_FORBIDDEN_INHERITED_ENV = (
+    "ERPNEXT_URL",
+    "ERPNEXT_API_KEY",
+    "ERPNEXT_API_SECRET",
+    "ERPNEXT_TENANT_ID",
+)
+
 
 class LocalSandbox(Sandbox):
     def __init__(self, id: str, path_mappings: dict[str, str] | None = None):
@@ -153,13 +168,20 @@ class LocalSandbox(Sandbox):
         # Resolve container paths in command before execution
         resolved_command = self._resolve_paths_in_command(command)
 
-        # Merge per-invocation env onto the host environment. This is the
-        # injection point for per-user credentials (e.g. ERPNEXT_* vars) —
-        # the subprocess sees them, but they never touch the host process's
-        # os.environ, so concurrent threads can't cross-contaminate.
-        subprocess_env: dict[str, str] | None = None
+        # Build the subprocess env explicitly so we control exactly what the
+        # bash subprocess sees. Previously we passed env=None when the per-call
+        # dict was empty, which made subprocess.run() inherit the entire
+        # langgraph os.environ — including any ERPNEXT_* vars that leaked into
+        # the parent process via .env / docker-compose env_file. The agent
+        # could then ``echo $ERPNEXT_API_KEY`` and read the secret even though
+        # tools._extract_erpnext_env had correctly gated the command out.
+        # Now: always start from os.environ.copy(), strip the credential
+        # deny-list, and merge the per-call dict back on top — the only path
+        # by which ERPNEXT_* reaches the subprocess.
+        subprocess_env = os.environ.copy()
+        for key in _FORBIDDEN_INHERITED_ENV:
+            subprocess_env.pop(key, None)
         if env:
-            subprocess_env = os.environ.copy()
             subprocess_env.update({k: str(v) for k, v in env.items() if v is not None})
 
         result = subprocess.run(
