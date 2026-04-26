@@ -42,23 +42,30 @@ services:
       dockerfile: backend/Dockerfile
     container_name: deer-flow-gateway
     command: sh -c "cd backend && uv run uvicorn src.gateway.app:app --host 0.0.0.0 --port 8001 --workers 2"
+    # Defaults (`${VAR:-...}`) mirror what scripts/deploy.sh would export, so
+    # `docker compose restart` works even when invoked outside that wrapper
+    # (e.g. by scripts/deploy/deploy-deerflow.sh in restart-only mode).
+    # Relative paths resolve from this compose file's dir (`docker/`).
     volumes:
-      - ${DEER_FLOW_CONFIG_PATH}:/app/backend/config.yaml:ro
-      - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/backend/extensions_config.json:ro
+      - ${DEER_FLOW_CONFIG_PATH:-../config.yaml}:/app/backend/config.yaml:ro
+      - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH:-../extensions_config.json}:/app/backend/extensions_config.json:ro
       # gateway needs write access for POST /api/skills/install to extract
       # uploaded .skill archives into /app/skills/custom/. langgraph keeps
       # its skills mount read-only (below) since it only reads skills.
       - ../skills:/app/skills
-      - ${DEER_FLOW_HOME}:/app/backend/.deer-flow
+      - ${DEER_FLOW_HOME:-../backend/.deer-flow}:/app/backend/.deer-flow
       # DooD: AioSandboxProvider starts sandbox containers via host Docker daemon
-      - ${DEER_FLOW_DOCKER_SOCKET}:/var/run/docker.sock
+      - ${DEER_FLOW_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     working_dir: /app
     environment:
       - CI=true
       - DEER_FLOW_HOME=/app/backend/.deer-flow
-      # DooD path/network translation
-      - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_HOME}
-      - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_REPO_ROOT}/skills
+      # DooD path/network translation. These must be absolute host paths so
+      # the host Docker daemon can resolve them when spawning sandbox
+      # containers; the relative-path fallbacks here only keep the parse
+      # green — DooD itself still requires deploy.sh to export real values.
+      - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_HOME:-../backend/.deer-flow}
+      - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_REPO_ROOT:-..}/skills
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal
     env_file:
       - ../.env
@@ -78,20 +85,20 @@ services:
     container_name: deer-flow-langgraph
     command: sh -c "cd /app/backend && uv run langgraph dev --no-browser --allow-blocking --no-reload --host 0.0.0.0 --port 2024"
     volumes:
-      - ${DEER_FLOW_CONFIG_PATH}:/app/config.yaml:ro
-      - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/extensions_config.json:ro
-      - ${DEER_FLOW_HOME}:/app/backend/.deer-flow
+      - ${DEER_FLOW_CONFIG_PATH:-../config.yaml}:/app/config.yaml:ro
+      - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH:-../extensions_config.json}:/app/extensions_config.json:ro
+      - ${DEER_FLOW_HOME:-../backend/.deer-flow}:/app/backend/.deer-flow
       - ../skills:/app/skills:ro
       - ../backend/.langgraph_api:/app/backend/.langgraph_api
       # DooD: same as gateway
-      - ${DEER_FLOW_DOCKER_SOCKET}:/var/run/docker.sock
+      - ${DEER_FLOW_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     environment:
       - CI=true
       - DEER_FLOW_HOME=/app/backend/.deer-flow
       - DEER_FLOW_CONFIG_PATH=/app/config.yaml
       - DEER_FLOW_EXTENSIONS_CONFIG_PATH=/app/extensions_config.json
-      - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_HOME}
-      - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_REPO_ROOT}/skills
+      - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_HOME:-../backend/.deer-flow}
+      - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_REPO_ROOT:-..}/skills
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal
       # Disable LangSmith tracing — LANGSMITH_API_KEY is not required.
       # Set LANGCHAIN_TRACING_V2=true and LANGSMITH_API_KEY in .env to enable.
@@ -117,8 +124,8 @@ services:
     environment:
       - K8S_NAMESPACE=deer-flow
       - SANDBOX_IMAGE=enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
-      - SKILLS_HOST_PATH=${DEER_FLOW_REPO_ROOT}/skills
-      - THREADS_HOST_PATH=${DEER_FLOW_HOME}/threads
+      - SKILLS_HOST_PATH=${DEER_FLOW_REPO_ROOT:-..}/skills
+      - THREADS_HOST_PATH=${DEER_FLOW_HOME:-../backend/.deer-flow}/threads
       - KUBECONFIG_PATH=/root/.kube/config
       - NODE_HOST=host.docker.internal
       - K8S_API_SERVER=https://host.docker.internal:26443
