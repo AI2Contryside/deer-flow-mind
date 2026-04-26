@@ -39,6 +39,7 @@ dependencies = [
     "markdown-to-mrkdwn>=0.3.1",
     "psycopg-pool",
     "psycopg[binary]",
+    "oss2>=2.18.4",
     "python-telegram-bot>=21.0",
     "slack-sdk>=3.33.0",
     "langgraph-sdk>=0.1.51",

@@ -410,10 +410,23 @@ Multi-file upload with automatic document conversion:
 - Supports: PDF, PPT, Excel, Word documents (converted via `markitdown`)
 - Rejects directory inputs before copying so uploads stay all-or-nothing
 - Reuses one conversion worker per request when called from an active event loop
-- Files stored in thread-isolated directories
+- Files stored in thread-isolated directories (host filesystem)
+- When the `X-Tenant-ID` header is present, files are also mirrored to Aliyun OSS bucket `trademind-chat-session` under `tenants/<tenant>/threads/<thread>/uploads/<key>`, with a per-thread `_manifest.json` co-located there
 - Agent receives uploaded file list via `UploadsMiddleware`
 
 See [docs/FILE_UPLOAD.md](docs/FILE_UPLOAD.md) for details.
+
+### Aliyun OSS storage (`src/storage/`)
+
+OSS abstraction shared by uploads, artifacts router, and `present_file_tool`:
+
+- `src/storage/oss_config.py` — Pydantic-shaped config dataclass; AK/SK from env (`ALIYUN_OSS_ACCESS_KEY_ID` / `ALIYUN_OSS_ACCESS_KEY_SECRET`).
+- `src/storage/oss_client.py` — `OssClient` (production) + `InMemoryStorage` (tests), both satisfying the `Storage` Protocol.
+- `src/storage/keys.py` — object-key builders that mirror the Go-side `internal/oss/keys.go` byte-for-byte (`chat_upload_key`, `chat_artifact_key`, `chat_thread_uploads_manifest_key`, prefix helpers).
+
+**OSS is best-effort:** missing tenant header or unconfigured OSS falls back to local-only behaviour without erroring. `config.yaml` block is optional and lives at the top level under `oss:`.
+
+**AI artifacts** are pushed by `src/tools/builtins/present_file_tool.py` to `tenants/<tenant>/threads/<thread>/outputs/<filename>`. The artifacts router prefers a signed-URL 302 to OSS when the object exists, otherwise serves from the local thread directory.
 
 ### Plan Mode
 

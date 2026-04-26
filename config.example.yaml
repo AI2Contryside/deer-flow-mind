@@ -433,3 +433,19 @@ checkpointer:
 #           context:
 #             thinking_enabled: true
 #             subagent_enabled: true
+
+# ──────────────────────────────────────────────────────────────────────────
+# Aliyun OSS object storage (optional but required for cross-replica
+# uploads/artifacts). AK/SK MUST come from env (ALIYUN_OSS_ACCESS_KEY_ID /
+# ALIYUN_OSS_ACCESS_KEY_SECRET) — never commit them to yaml. The chat_bucket
+# stores user-uploaded files and AI-generated artifacts; sys_bucket holds
+# avatars and tenant template documents (managed by trademind-backend).
+# ──────────────────────────────────────────────────────────────────────────
+# oss:
+#   endpoint: "oss-cn-hangzhou.aliyuncs.com"
+#   region: "cn-hangzhou"
+#   sys_bucket: "trademind-sys"
+#   chat_bucket: "trademind-chat-session"
+#   signed_url_ttl_seconds: 3600
+#   max_upload_bytes: 20971520    # 20 MiB
+#   avatar_max_bytes: 5242880     # 5 MiB

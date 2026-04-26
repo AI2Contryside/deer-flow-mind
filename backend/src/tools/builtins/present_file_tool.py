@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from typing import Annotated
 
@@ -8,6 +9,9 @@ from langgraph.typing import ContextT
 
 from src.agents.thread_state import ThreadState
 from src.config.paths import VIRTUAL_PATH_PREFIX, get_paths
+from src.storage import ACL_PRIVATE, chat_artifact_key, get_default
+
+logger = logging.getLogger(__name__)
 
 OUTPUTS_VIRTUAL_PREFIX = f"{VIRTUAL_PATH_PREFIX}/outputs"
 
@@ -59,6 +63,41 @@ def _normalize_presented_filepath(
     return f"{OUTPUTS_VIRTUAL_PREFIX}/{relative_path.as_posix()}"
 
 
+def _push_to_oss(thread_id: str, tenant_id: str | None, virtual_path: str) -> None:
+    """Best-effort upload of an artifact to the chat bucket.
+
+    Skipped silently when there's no tenant in scope, when OSS is not wired
+    up, or when the local file is missing — the artifact still appears in
+    ``ThreadState.artifacts`` and the artifacts router will fall back to the
+    local file. We log warnings so failures are visible during debugging
+    without breaking the agent's response.
+    """
+    if not tenant_id:
+        return
+    try:
+        storage = get_default()
+    except Exception as exc:
+        logger.debug("OSS unavailable during present_files: %s", exc)
+        return
+    try:
+        local_path = get_paths().resolve_virtual_path(thread_id, virtual_path)
+    except Exception as exc:
+        logger.warning("Could not resolve %s for OSS push: %s", virtual_path, exc)
+        return
+    if not local_path.is_file():
+        logger.warning("present_files: local file missing: %s", local_path)
+        return
+    filename = local_path.name
+    key = chat_artifact_key(tenant_id, thread_id, filename)
+    bucket = storage.config.chat_bucket
+    try:
+        with open(local_path, "rb") as fh:
+            storage.put_object(bucket, key, fh.read(), content_type="", acl=ACL_PRIVATE)
+        logger.info("Mirrored artifact %s -> oss://%s/%s", filename, bucket, key)
+    except Exception as exc:
+        logger.warning("OSS push failed for %s: %s", filename, exc)
+
+
 @tool("present_files", parse_docstring=True)
 def present_file_tool(
     runtime: ToolRuntime[ContextT, ThreadState],
@@ -90,6 +129,14 @@ def present_file_tool(
         return Command(
             update={"messages": [ToolMessage(f"Error: {exc}", tool_call_id=tool_call_id)]},
         )
+
+    # Mirror each artifact to OSS so other replicas / the desktop client can
+    # fetch it via signed URL without depending on this host's filesystem.
+    thread_id = runtime.context.get("thread_id") if runtime.context else None
+    tenant_id = runtime.context.get("tenant_id") if runtime.context else None
+    if thread_id:
+        for vp in normalized_paths:
+            _push_to_oss(thread_id, tenant_id, vp)
 
     # The merge_artifacts reducer will handle merging and deduplication
     return Command(
