@@ -112,6 +112,11 @@ CI runs these regression tests for every pull request via [.github/workflows/bac
 - `is_plan_mode` - Enable TodoList middleware
 - `subagent_enabled` - Enable task delegation tool
 
+**Checkpointer & orphan run cleanup** (`src/agents/checkpointer/`):
+- `make_checkpointer()` (in `async_provider.py`) is registered via `langgraph.json` and called by the LangGraph dev startup pipeline before queue/worker boot.
+- On entry it calls `mark_orphan_runs_as_interrupted()` (`orphan_runs.py`), which sweeps `langgraph_runtime_inmem.database.GLOBAL_STORE["runs"]` and flips every `status="running"` row to `status="interrupted"`. The persisted run store (`.langgraph_api/.langgraph_ops.pckl`) survives container restarts; without this sweep, a run that was running at shutdown comes back as a zombie that pins the lone in-mem worker (`max_workers=1`) and wedges the queue for that thread.
+- Safe by construction: workers haven't started yet at this hook, so no run can legitimately be `running`. No-op when `langgraph_runtime_inmem` isn't installed (hosted LangGraph deployments).
+
 ### Middleware Chain
 
 Middlewares execute in strict order in `src/agents/lead_agent/agent.py`:

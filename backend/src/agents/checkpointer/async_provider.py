@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator
 
 from langgraph.types import Checkpointer
 
+from src.agents.checkpointer.orphan_runs import mark_orphan_runs_as_interrupted
 from src.agents.checkpointer.provider import (
     POSTGRES_CONN_REQUIRED,
     POSTGRES_INSTALL,
@@ -98,6 +99,11 @@ async def make_checkpointer() -> AsyncIterator[Checkpointer]:
     """
 
     config = get_app_config()
+
+    # Sweep the in-memory runtime store for orphan runs left over from a prior
+    # crash / restart. Must run before LangGraph queue workers come up; the
+    # langgraph dev startup pipeline calls this factory before worker boot.
+    mark_orphan_runs_as_interrupted()
 
     if config.checkpointer is None:
         from langgraph.checkpoint.memory import InMemorySaver
