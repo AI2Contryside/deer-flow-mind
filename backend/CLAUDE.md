@@ -300,6 +300,53 @@ Bridges external messaging platforms (Feishu, Slack, Telegram) to the DeerFlow a
 - `max_facts` / `fact_confidence_threshold` - Fact storage limits (100 / 0.7)
 - `max_injection_tokens` - Token limit for prompt injection (2000)
 
+### Tenant Profile System (`src/agents/tenant_profile/`)
+
+Per-tenant operational memory: distilled facts and frequently-used reference
+data so the agent doesn't burn tool calls re-confirming "who is this tenant"
+on every conversation. See `backend/docs/TENANT_PROFILE_DESIGN.md` for the
+full design.
+
+**Three layers** (mirrors design doc §2):
+- **Observation** (`extractors.py` / `log.py` / `observer.py`): every
+  successful FrappeClient call funnels through `record_event(...)`, which
+  pulls link-field references out of the payload and appends a JSON line to
+  `{base_dir}/tenant_profile/{tenant_id}/usage_log.jsonl`. Browse-style
+  `get_list` calls (>5 rows) and intra-thread duplicates are dropped on the
+  fly. Failures only warning-log — never raise.
+- **Archive** (`archive.py` + `meta.py`): after a successful summarize the
+  rotated jsonl is gzipped, content-addressed by SHA-256 (`-<sha8>` suffix),
+  and uploaded via the project's `Storage` Protocol to OSS bucket
+  `trademind-chat-session` under `tenants/<id>/profile/usage_log/<date>-<sha8>.jsonl.gz`.
+  Local copy retained. Failures land in `meta.pending_oss_uploads` and retry
+  on the next summarize. Bucket lifecycle handles long-term retention.
+- **Summarizer + injection** (`facts.py` / `trigger.py` / `queue.py` /
+  `summarizer/` / `store.py` / `injection.py`): `bootstrap_facts` pulls
+  Company/Settings/Employee/User from ERPNext through `ErpnextReadOnlyClient`
+  (Protocol — production wires a real impl, tests pass a fake, default is a
+  stub that warns). The summarizer sub-agent is a one-shot LLM call: rolls
+  the usage log up into a per-doctype top-N preview, asks the model for a
+  `TenantProfile` JSON, validates against pydantic, and rejects names not
+  traced back to facts/usage_window/previous_profile. Triggered via
+  threshold (`event_count_threshold` / `time_threshold_seconds` /
+  `cooldown_seconds`) or `force=True`. Output JSON renders into a
+  `<tenant_profile>` section injected into the lead-agent system prompt
+  ahead of `<memory>`. NestedSet doctypes (Account / Cost Center / item /
+  customer / supplier groups / Territory) render bucketed by `root_type` /
+  `parent_*` per design §6.2.
+
+**Cold start**: first session for a tenant with no `profile.json` triggers
+a synchronous facts bootstrap with a 2-second hard timeout. Bootstrap that
+returns nothing useful (e.g. stub ERPNext client) collapses to an empty
+prompt section so the agent's normal path keeps working.
+
+**Configuration** (`config.yaml` → `tenant_profile`): `enabled`, `storage_path`,
+`facts.sync_bootstrap_timeout_seconds`, `observation.failure_log_level`,
+`archive.bucket` / `archive.max_retry_attempts`, `trigger.event_count_threshold` /
+`time_threshold_seconds` / `cooldown_seconds`, `summarizer.model` (null →
+fallback to lead-agent default), `decay.recently_quiet_runs_to_drop`,
+per-doctype `top_k` caps, `injection.max_tokens`.
+
 ### Reflection System (`src/reflection/`)
 
 - `resolve_variable(path)` - Import module and return variable (e.g., `module.path:variable_name`)

@@ -340,6 +340,11 @@ def _collect_eligible_names(inputs: SummarizeInput) -> dict[str, set[str]]:
     For names found in arbitrary facts strings we don't know which doctype
     they belong to, so we stash them under a sentinel ``__any__`` bucket
     that the eligibility check accepts as a wildcard.
+
+    Names already in ``previous_profile`` are also eligible — the decay
+    rule (TENANT_PROFILE_DESIGN.md §5.6) requires entities to survive
+    one or two summarize windows of inactivity before being dropped, so
+    the LLM has to be allowed to carry them over.
     """
     eligible: dict[str, set[str]] = {}
 
@@ -354,10 +359,68 @@ def _collect_eligible_names(inputs: SummarizeInput) -> dict[str, set[str]]:
             if isinstance(top, dict) and isinstance(top.get("name"), str):
                 bucket.add(top["name"])
 
+    if inputs.previous_profile:
+        _collect_previous_profile_names(inputs.previous_profile, eligible)
+
     any_bucket: set[str] = set()
     _collect_strings(inputs.facts, any_bucket)
     eligible["__any__"] = any_bucket
     return eligible
+
+
+def _collect_previous_profile_names(previous: dict[str, Any], eligible: dict[str, set[str]]) -> None:
+    """Carry over every key_entity / taxonomy name from the previous profile."""
+    ke = previous.get("key_entities") or {}
+    flat_groups: dict[str, str] = {
+        "customers": "Customer",
+        "suppliers": "Supplier",
+        "items": "Item",
+        "warehouses": "Warehouse",
+        "price_lists": "Price List",
+        "uoms": "UOM",
+        "sales_tax_templates": "Sales Taxes and Charges Template",
+        "purchase_tax_templates": "Purchase Taxes and Charges Template",
+        "payment_terms_templates": "Payment Terms Template",
+    }
+    for slot, doctype in flat_groups.items():
+        for ref in ke.get(slot) or []:
+            if isinstance(ref, dict) and isinstance(ref.get("name"), str):
+                eligible.setdefault(doctype, set()).add(ref["name"])
+
+    bucketed_groups: dict[str, str] = {
+        "accounts_by_root_type": "Account",
+        "cost_centers_by_parent": "Cost Center",
+    }
+    for slot, doctype in bucketed_groups.items():
+        buckets = ke.get(slot) or {}
+        if isinstance(buckets, dict):
+            for refs in buckets.values():
+                if not isinstance(refs, list):
+                    continue
+                for ref in refs:
+                    if isinstance(ref, dict) and isinstance(ref.get("name"), str):
+                        eligible.setdefault(doctype, set()).add(ref["name"])
+
+    tax = previous.get("taxonomy") or {}
+    tax_bucketed: dict[str, str] = {
+        "item_groups_by_parent": "Item Group",
+        "customer_groups_by_parent": "Customer Group",
+        "supplier_groups_by_parent": "Supplier Group",
+        "territories_by_parent": "Territory",
+    }
+    for slot, doctype in tax_bucketed.items():
+        buckets = tax.get(slot) or {}
+        if isinstance(buckets, dict):
+            for refs in buckets.values():
+                if not isinstance(refs, list):
+                    continue
+                for ref in refs:
+                    if isinstance(ref, dict) and isinstance(ref.get("name"), str):
+                        eligible.setdefault(doctype, set()).add(ref["name"])
+    for slot, doctype in (("sales_persons", "Sales Person"), ("brands", "Brand")):
+        for ref in tax.get(slot) or []:
+            if isinstance(ref, dict) and isinstance(ref.get("name"), str):
+                eligible.setdefault(doctype, set()).add(ref["name"])
 
 
 def _collect_strings(node: Any, bucket: set[str]) -> None:

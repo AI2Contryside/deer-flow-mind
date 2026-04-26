@@ -88,7 +88,7 @@ Remittance slip (水单) · Shipping marks (唛头).
 </trade_domain_knowledge>
 
 {soul}
-{memory_context}
+{profile_context}{memory_context}
 
 <thinking_style>
 - Think briefly before acting: what is clear, what is ambiguous, what is missing.
@@ -235,6 +235,21 @@ ignore it and retry the same command, and do not invent a different next step.
 """
 
 
+def _get_profile_context(tenant_id: str | None, *, user_email: str | None = None) -> str:
+    """Wrap ``tenant_profile.injection.get_profile_context`` for prompt assembly.
+
+    Best-effort: any failure collapses to an empty string so the lead agent
+    keeps working even if the tenant_profile feature is misconfigured.
+    """
+    try:
+        from src.agents.tenant_profile.injection import get_profile_context
+
+        return get_profile_context(tenant_id, user_email=user_email)
+    except Exception as exc:
+        print(f"Failed to load tenant profile context: {exc}")
+        return ""
+
+
 def _get_memory_context(agent_name: str | None = None, tenant_id: str | None = None) -> str:
     """Get memory context for injection into system prompt.
 
@@ -337,7 +352,12 @@ def apply_prompt_template(
     agent_name: str | None = None,
     available_skills: set[str] | None = None,
     tenant_id: str | None = None,
+    user_email: str | None = None,
 ) -> str:
+    # Tenant profile (optional, ahead of memory so the agent reads "who is this
+    # tenant" before any per-conversation memory is layered on).
+    profile_context = _get_profile_context(tenant_id, user_email=user_email)
+
     # Get memory context
     memory_context = _get_memory_context(agent_name, tenant_id)
 
@@ -359,6 +379,7 @@ def apply_prompt_template(
         agent_name=agent_name or "DeerFlow 2.0",
         soul=get_agent_soul(agent_name),
         skills_section=skills_section,
+        profile_context=profile_context,
         memory_context=memory_context,
         subagent_section=subagent_section,
         subagent_reminder=subagent_reminder,
