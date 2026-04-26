@@ -325,6 +325,17 @@ def ls_tool(runtime: ToolRuntime[ContextT, ThreadState], description: str, path:
         return f"Error: Unexpected error listing directory: {type(e).__name__}: {e}"
 
 
+# Skill manifests are already injected into the system prompt by the skills
+# loader, so re-reading them as a tool call duplicates 5-15K tokens of context
+# for zero new information. Pattern matches both virtual (/mnt/skills/...) and
+# host-translated paths (anything ending in `/skills/<group>/<name>/SKILL.md`).
+_SKILL_MANIFEST_PATTERN = re.compile(r"(^|/)skills/[^/]+/[^/]+/SKILL\.md$", re.IGNORECASE)
+
+
+def _is_skill_manifest(path: str) -> bool:
+    return bool(_SKILL_MANIFEST_PATTERN.search(path or ""))
+
+
 @tool("read_file", parse_docstring=True)
 def read_file_tool(
     runtime: ToolRuntime[ContextT, ThreadState],
@@ -341,6 +352,12 @@ def read_file_tool(
         start_line: Optional starting line number (1-indexed, inclusive). Use with end_line to read a specific range.
         end_line: Optional ending line number (1-indexed, inclusive). Use with start_line to read a specific range.
     """
+    if _is_skill_manifest(path):
+        return (
+            "Skill manifest already loaded in the system prompt — no need to re-read it. "
+            "If you need to inspect the skill's runtime files (e.g. scripts/), point this tool "
+            "at those concrete paths instead of SKILL.md."
+        )
     try:
         sandbox = ensure_sandbox_initialized(runtime)
         ensure_thread_directories_exist(runtime)
