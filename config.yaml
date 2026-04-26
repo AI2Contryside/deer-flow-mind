@@ -231,27 +231,33 @@ summarization:
   # Trigger conditions - at least one required
   # Summarization runs when ANY threshold is met (OR logic)
   # You can specify a single trigger or a list of triggers
+  #
+  # NOTE (tuned 2026-04-26): bumped from tokens:15564 to fraction:0.7 because
+  # the ERPNext multi-step flow (xlsx parse → SKILL.md read → many bash calls)
+  # legitimately accumulates ~30-40K chars of tool output before any real work
+  # happens. Firing summarization at 15K caused a "summarize → re-explore →
+  # summarize again" loop that ate the LangGraph recursion budget.
   trigger:
-    # Trigger when token count reaches 15564
-    - type: tokens
-      value: 15564
-    # Uncomment to also trigger when message count reaches 50
+    - type: fraction
+      value: 0.7
+    # Alternatives kept for reference:
+    # - type: tokens
+    #   value: 15564
     # - type: messages
     #   value: 50
-    # Uncomment to trigger when 80% of model's max input tokens is reached
-    # - type: fraction
-    #   value: 0.8
 
   # Context retention policy after summarization
   # Specifies how much recent history to preserve
+  #
+  # Switched from messages:10 → tokens:8000 so the keep window adapts to message
+  # size. With tool-heavy turns a single tool_result can be 10K+ chars; counting
+  # by message conflates "10 short pings" with "10 huge JSON dumps".
   keep:
-    # Keep the most recent 10 messages (recommended)
-    type: messages
-    value: 10
-    # Alternative: Keep specific token count
-    # type: tokens
-    # value: 3000
-    # Alternative: Keep percentage of model's max input tokens
+    type: tokens
+    value: 8000
+    # Alternatives:
+    # type: messages
+    # value: 10
     # type: fraction
     # value: 0.3
 
