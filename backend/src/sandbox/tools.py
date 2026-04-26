@@ -232,21 +232,50 @@ def ensure_thread_directories_exist(runtime: ToolRuntime[ContextT, ThreadState] 
     runtime.state["thread_directories_created"] = True
 
 
-def _extract_erpnext_env(runtime: ToolRuntime[ContextT, ThreadState] | None) -> dict[str, str]:
+# Substring that gates ERPNext credential env injection. Only commands
+# that actually invoke the erpnext-cli launcher get the credentials — a
+# plain ``echo $ERPNEXT_API_KEY`` or ``curl …`` will see an empty
+# environment, which is what we want after session b987fdbe-... where the
+# agent leaked ``ERPNEXT_API_KEY`` / ``ERPNEXT_API_SECRET`` straight to
+# chat and used the same values to drive raw curl bypassing the skill.
+_ERPNEXT_CLI_LAUNCHER_HINT = "/mnt/skills/public/erpnext-cli/scripts/erpnext.py"
+
+
+def _command_invokes_erpnext_cli(command: str) -> bool:
+    """Return True iff the bash command line will execute the erpnext-cli
+    launcher. We match on the literal launcher path so that a request like
+    ``python /mnt/skills/public/erpnext-cli/scripts/erpnext.py doc list …``
+    gets the env, while ``echo $ERPNEXT_API_KEY``, ``env``, ``printenv``,
+    ``curl …``, or any ad-hoc ``python -c`` does not.
+
+    This is a coarse gate, not a sandbox boundary — the prompt and other
+    layers carry the real "no raw HTTP" rule. The gate only ensures the
+    common ``echo $VAR`` exfiltration pattern returns nothing.
+    """
+    if not command:
+        return False
+    return _ERPNEXT_CLI_LAUNCHER_HINT in command
+
+
+def _extract_erpnext_env(
+    runtime: ToolRuntime[ContextT, ThreadState] | None,
+    command: str,
+) -> dict[str, str]:
     """Pull ERPNext credentials off the runtime context and shape them as env
-    vars that the `erpnext-cli` skill expects.
+    vars that the `erpnext-cli` skill expects — but **only** when the command
+    actually invokes the CLI launcher. Plain bash never sees these values.
 
     Trademind's gateway puts per-user credentials into `run_context` under
-    `erpnext_credentials`: {"url", "api_key", "api_secret", "email"}. When
-    the agent calls any bash tool, we unconditionally inject ERPNEXT_URL /
-    ERPNEXT_API_KEY / ERPNEXT_API_SECRET for the child process — it's cheap,
-    non-sensitive to other skills, and avoids needing to detect whether a
-    given command happens to be the erpnext-cli launcher.
+    `erpnext_credentials`: {"url", "api_key", "api_secret", "email"}.
 
-    Returns an empty dict when the user hasn't been provisioned (credentials
-    not on the user row) or when the context isn't shaped as expected.
+    Returns an empty dict when:
+      - the user has no provisioned credentials,
+      - the context isn't shaped as expected, or
+      - the command does not invoke the erpnext-cli launcher (gating).
     """
     if runtime is None or runtime.context is None:
+        return {}
+    if not _command_invokes_erpnext_cli(command):
         return {}
     creds = runtime.context.get("erpnext_credentials")
     if not isinstance(creds, dict):
@@ -289,7 +318,7 @@ def bash_tool(runtime: ToolRuntime[ContextT, ThreadState], description: str, com
         if is_local_sandbox(runtime):
             thread_data = get_thread_data(runtime)
             command = replace_virtual_paths_in_command(command, thread_data)
-        env = _extract_erpnext_env(runtime) or None
+        env = _extract_erpnext_env(runtime, command) or None
         return sandbox.execute_command(command, env=env)
     except SandboxError as e:
         return f"Error: {e}"

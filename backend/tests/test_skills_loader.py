@@ -39,6 +39,30 @@ def test_load_skills_discovers_nested_skills_and_sets_container_paths(tmp_path: 
     assert team_skill.get_container_file_path() == "/mnt/skills/custom/team/helper/SKILL.md"
 
 
+def test_load_skills_dedups_by_name_with_public_winning(tmp_path: Path, caplog):
+    """A skill name present in both public/ and custom/ should resolve to the
+    public copy, with a warning logged. Pinned after session b987fdbe-...
+    where two ``erpnext-cli`` skills (public + custom) confused the agent
+    into bouncing between them (msg 79)."""
+    import logging
+
+    skills_root = tmp_path / "skills"
+    _write_skill(skills_root / "public" / "erpnext-cli", "erpnext-cli", "public copy")
+    _write_skill(skills_root / "custom" / "cli-anything-erpnext", "erpnext-cli", "custom copy")
+
+    with caplog.at_level(logging.WARNING, logger="src.skills.loader"):
+        skills = load_skills(skills_path=skills_root, use_config=False, enabled_only=False)
+
+    same_name = [s for s in skills if s.name == "erpnext-cli"]
+    assert len(same_name) == 1, f"expected exactly one erpnext-cli, got {len(same_name)}"
+    assert same_name[0].category == "public"
+    assert same_name[0].description == "public copy"
+
+    warning_text = " ".join(rec.message for rec in caplog.records)
+    assert "Skipping duplicate skill" in warning_text
+    assert "erpnext-cli" in warning_text
+
+
 def test_load_skills_skips_hidden_directories(tmp_path: Path):
     """Hidden directories should be excluded from recursive discovery."""
     skills_root = tmp_path / "skills"

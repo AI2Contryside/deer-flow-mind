@@ -1,8 +1,11 @@
+import logging
 import os
 from pathlib import Path
 
 from .parser import parse_skill_file
 from .types import Skill
+
+logger = logging.getLogger(__name__)
 
 
 def get_skills_root_path() -> Path:
@@ -52,9 +55,17 @@ def load_skills(skills_path: Path | None = None, use_config: bool = True, enable
     if not skills_path.exists():
         return []
 
-    skills = []
+    skills: list[Skill] = []
+    # Track which skills we've already accepted by name. After session
+    # b987fdbe-... the agent found two ``erpnext-cli`` skills under
+    # ``/mnt/skills/public/`` AND ``/mnt/skills/custom/`` (msg 79) and
+    # bounced between them, wasting steps. Public is canonical: the
+    # public version is what we ship; the custom slot is for user
+    # uploads. If a custom skill collides with a public one, ignore the
+    # custom copy and warn loudly so the operator can clean it up.
+    seen_by_name: dict[str, Skill] = {}
 
-    # Scan public and custom directories
+    # Scan public first, then custom, so public wins on name collision.
     for category in ["public", "custom"]:
         category_path = skills_path / category
         if not category_path.exists() or not category_path.is_dir():
@@ -70,8 +81,22 @@ def load_skills(skills_path: Path | None = None, use_config: bool = True, enable
             relative_path = skill_file.parent.relative_to(category_path)
 
             skill = parse_skill_file(skill_file, category=category, relative_path=relative_path)
-            if skill:
-                skills.append(skill)
+            if not skill:
+                continue
+            existing = seen_by_name.get(skill.name)
+            if existing is not None:
+                logger.warning(
+                    "Skipping duplicate skill %r at %s (already loaded from %s/%s); "
+                    "delete the duplicate from %s to silence this warning",
+                    skill.name,
+                    skill.skill_dir,
+                    existing.category,
+                    existing.skill_path or "<root>",
+                    skill.skill_dir,
+                )
+                continue
+            seen_by_name[skill.name] = skill
+            skills.append(skill)
 
     # Load skills state configuration and update enabled status
     # NOTE: We use ExtensionsConfig.from_file() instead of get_extensions_config()

@@ -7,6 +7,7 @@ from langchain_core.runnables import RunnableConfig
 from src.agents.lead_agent.prompt import apply_prompt_template
 from src.agents.middlewares.clarification_middleware import ClarificationMiddleware
 from src.agents.middlewares.memory_middleware import MemoryMiddleware
+from src.agents.middlewares.repeated_tool_failure_middleware import RepeatedToolFailureMiddleware
 from src.agents.middlewares.subagent_limit_middleware import SubagentLimitMiddleware
 from src.agents.middlewares.title_middleware import TitleMiddleware
 from src.agents.middlewares.todo_middleware import TodoMiddleware
@@ -244,6 +245,12 @@ def _build_middlewares(config: RunnableConfig, model_name: str | None, agent_nam
     if subagent_enabled:
         max_concurrent_subagents = config.get("configurable", {}).get("max_concurrent_subagents", 3)
         middlewares.append(SubagentLimitMiddleware(max_concurrent=max_concurrent_subagents))
+
+    # RepeatedToolFailureMiddleware bounds the retry loop after the same tool
+    # fails the same way 3x in a row (see session b987fdbe-... where the
+    # agent re-tried Frappe BrokenPipe 8+ times). Goes before clarification
+    # so an abort routes to END instead of being intercepted as a tool call.
+    middlewares.append(RepeatedToolFailureMiddleware())
 
     # ClarificationMiddleware should always be last
     middlewares.append(ClarificationMiddleware())
