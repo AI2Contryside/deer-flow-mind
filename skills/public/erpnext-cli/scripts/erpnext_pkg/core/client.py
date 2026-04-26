@@ -54,6 +54,20 @@ class FrappeClient:
         timeout: int = DEFAULT_TIMEOUT,
         verify_ssl: bool = True,
     ):
+        # Tenant scoping is mandatory per CLAUDE.md: every ERPNext call
+        # originating from DeerFlow must carry X-Tenant-ID. The server uses
+        # this header to set the PG session variable that drives row-level
+        # security; a missing/empty header makes tenant-scoped tables appear
+        # empty (and would silently cross tenant boundaries on writes).
+        # Normalize empty strings to "missing" and refuse to construct a
+        # tenant-less client.
+        normalized_tenant = (tenant_id or "").strip() or None
+        if not normalized_tenant:
+            raise AuthError(
+                "X-Tenant-ID is required. Pass --tenant <id> or set "
+                "ERPNEXT_TENANT_ID before invoking the CLI."
+            )
+
         self.url = url.rstrip("/")
         self.timeout = timeout
         self._session = requests.Session()
@@ -62,20 +76,14 @@ class FrappeClient:
         self._api_secret = api_secret
         self._username = username
         self._password = password
-        self._tenant_id = tenant_id
+        self._tenant_id = normalized_tenant
         self._logged_in = False
 
         if api_key and api_secret:
             self._session.headers["Authorization"] = f"token {api_key}:{api_secret}"
         self._session.headers.setdefault("Accept", "application/json")
         self._session.headers.setdefault("X-Frappe-CLI", "cli-anything-erpnext")
-        # Tenant scoping. The server uses this header to set the PG session
-        # variable that drives row-level-security; missing or wrong values
-        # make tenant-scoped tables appear empty. Auth endpoints (login,
-        # get_logged_user) don't care, which is why we tolerate None here
-        # instead of asserting at construction time.
-        if tenant_id:
-            self._session.headers["X-Tenant-ID"] = tenant_id
+        self._session.headers["X-Tenant-ID"] = normalized_tenant
 
     @property
     def tenant_id(self) -> str | None:
@@ -84,7 +92,8 @@ class FrappeClient:
     def with_tenant(self, tenant_id: str) -> "FrappeClient":
         """Return a shallow copy bound to a different tenant. Each clone owns
         its own requests.Session so concurrent use across tenants cannot
-        race on shared headers."""
+        race on shared headers. ``tenant_id`` must be non-empty — the
+        constructor enforces the same invariant."""
         return FrappeClient(
             self.url,
             api_key=self._api_key,
@@ -296,12 +305,18 @@ def client_from_env() -> FrappeClient:
             "ERPNEXT_URL is not set. Run: "
             "cli-anything-erpnext session login --url https://... --api-key ... --api-secret ..."
         )
+    tenant = (os.environ.get("ERPNEXT_TENANT_ID") or "").strip() or None
+    if not tenant:
+        raise AuthError(
+            "ERPNEXT_TENANT_ID is not set. Every ERPNext call must be "
+            "tenant-scoped via X-Tenant-ID."
+        )
     return FrappeClient(
         url,
         api_key=os.environ.get("ERPNEXT_API_KEY"),
         api_secret=os.environ.get("ERPNEXT_API_SECRET"),
         username=os.environ.get("ERPNEXT_USERNAME"),
         password=os.environ.get("ERPNEXT_PASSWORD"),
-        tenant_id=os.environ.get("ERPNEXT_TENANT_ID") or None,
+        tenant_id=tenant,
         verify_ssl=os.environ.get("ERPNEXT_VERIFY_SSL", "1") != "0",
     )

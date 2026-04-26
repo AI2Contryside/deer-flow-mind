@@ -66,15 +66,20 @@ def cli(ctx: click.Context, json_mode: bool, session_file: str | None,
 
     # Propagate tenant id via env so Session.client() picks it up without
     # every cli_groups/*.py callsite needing to thread it through. Setting
-    # the env var is scoped to this process invocation.
-    if tenant_id:
-        os.environ["ERPNEXT_TENANT_ID"] = tenant_id
+    # the env var is scoped to this process invocation. Treat empty strings
+    # as missing so a misconfigured `ERPNEXT_TENANT_ID=""` doesn't slip past
+    # the enforcement in Session.client().
+    normalized_tenant = (tenant_id or "").strip() or None
+    if normalized_tenant:
+        os.environ["ERPNEXT_TENANT_ID"] = normalized_tenant
 
     ctx.ensure_object(dict)
     ctx.obj["json"] = json_mode
     ctx.obj["session_file"] = path
     ctx.obj["session"] = sess
-    ctx.obj["tenant_id"] = tenant_id or os.environ.get("ERPNEXT_TENANT_ID")
+    ctx.obj["tenant_id"] = normalized_tenant or (
+        os.environ.get("ERPNEXT_TENANT_ID") or ""
+    ).strip() or None
 
     if ctx.invoked_subcommand is None:
         ctx.invoke(repl_group.repl)

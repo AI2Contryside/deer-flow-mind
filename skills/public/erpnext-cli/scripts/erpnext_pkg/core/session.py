@@ -128,6 +128,10 @@ class Session:
         same rule: explicit argument wins, then ``ERPNEXT_TENANT_ID`` env
         var. Tenant is deliberately not stored in the on-disk session file —
         it is a per-invocation scope, not a per-user setting.
+
+        Raises ``AuthError`` if no tenant can be resolved: every ERPNext
+        call must carry ``X-Tenant-ID`` per CLAUDE.md. Empty strings are
+        treated as missing.
         """
         url = os.environ.get("ERPNEXT_URL") or self.url
         if not url:
@@ -140,7 +144,12 @@ class Session:
         api_secret = os.environ.get("ERPNEXT_API_SECRET") or self.api_secret
         username = os.environ.get("ERPNEXT_USERNAME") or self.username
         password = os.environ.get("ERPNEXT_PASSWORD") or self.password
-        tenant = tenant_id or os.environ.get("ERPNEXT_TENANT_ID") or None
+        tenant = (tenant_id or os.environ.get("ERPNEXT_TENANT_ID") or "").strip() or None
+        if not tenant:
+            raise AuthError(
+                "X-Tenant-ID is required. Pass --tenant <id> on the root "
+                "command or set ERPNEXT_TENANT_ID before invoking the CLI."
+            )
         verify_ssl = os.environ.get("ERPNEXT_VERIFY_SSL", "1") != "0" and self.verify_ssl
         c = FrappeClient(
             url,
