@@ -91,3 +91,28 @@ def test_lead_agent_skips_onboarding_section_when_subagents_disabled(tmp_path: P
         prompt = apply_prompt_template(subagent_enabled=False, tenant_id="acme-001")
 
     assert "<onboarding_required>" not in prompt
+
+
+@pytest.mark.unit
+def test_lead_agent_injects_tenant_name_into_onboarding_section(tmp_path: Path) -> None:
+    """tenant_name must appear in the onboarding nudge so the subagent can use
+    it as the ERPNext Company name without re-asking the user. Re-asking was
+    the #1 onboarding-survey complaint and the user-facing init flow on the
+    Go side already collected the value."""
+    from src.agents.lead_agent.prompt import apply_prompt_template
+
+    with patch("src.agents.tenant_profile.store.get_profile_path") as mock_path:
+        mock_path.return_value = tmp_path / "missing" / "profile.json"
+
+        prompt = apply_prompt_template(
+            subagent_enabled=True,
+            tenant_id="acme-001",
+            tenant_name="Acme Trading Ltd.",
+        )
+
+    assert "<onboarding_required>" in prompt
+    assert "Acme Trading Ltd." in prompt
+    # The subagent contract says the company line uses the literal label
+    # "Tenant company name:" so it can pull the value verbatim. Drift here
+    # would silently break the company-name shortcut.
+    assert "Tenant company name: Acme Trading Ltd." in prompt

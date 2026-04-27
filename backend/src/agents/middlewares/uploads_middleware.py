@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import NotRequired, override
+from typing import Any, NotRequired, override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
@@ -10,6 +10,12 @@ from langchain_core.messages import HumanMessage
 from langgraph.runtime import Runtime
 
 from src.config.paths import Paths, get_paths
+from src.utils.document_extract import (
+    docling_json_path,
+    format_summary_inline,
+    is_derived_artifact,
+    load_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +61,7 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         lines.append("")
         if new_files:
             for file in new_files:
-                size_kb = file["size"] / 1024
-                size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.1f} MB"
-                lines.append(f"- {file['filename']} ({size_str})")
-                lines.append(f"  Path: {file['path']}")
-                lines.append("")
+                lines.extend(self._render_file_entry(file))
         else:
             lines.append("(empty)")
 
@@ -67,16 +69,51 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
             lines.append("The following files were uploaded in previous messages and are still available:")
             lines.append("")
             for file in historical_files:
-                size_kb = file["size"] / 1024
-                size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.1f} MB"
-                lines.append(f"- {file['filename']} ({size_str})")
-                lines.append(f"  Path: {file['path']}")
-                lines.append("")
+                lines.extend(self._render_file_entry(file))
 
-        lines.append("You can read these files using the `read_file` tool with the paths shown above.")
+        lines.append("Use `read_file` on the path above for plain reads. For PDF / Office files a")
+        lines.append("structured `*.docling.json` sibling is available with full DoclingDocument JSON")
+        lines.append("(headings, tables with row/col spans, formulas, embedded pictures, page bboxes).")
+        lines.append("For very large spreadsheets prefer DuckDB `read_xlsx(path, sheet=, range=)` or")
+        lines.append("python-calamine over `pd.read_excel`. For huge .docx / .pptx, stream via")
+        lines.append("`zipfile` + `lxml.etree.iterparse` rather than loading into context.")
         lines.append("</uploaded_files>")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _render_file_entry(file: dict[str, Any]) -> list[str]:
+        """Render one file's lines for the ``<uploaded_files>`` block.
+
+        Includes a one-line structural summary and the docling sibling
+        path when a ``docling_summary`` is attached to the file metadata
+        (set by uploads.py at upload time, or hydrated from the on-disk
+        sidecar by ``before_agent``).
+        """
+        size_kb = file["size"] / 1024
+        size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.1f} MB"
+
+        summary = file.get("docling_summary") or {}
+        structure_inline = format_summary_inline(summary) if summary else ""
+        suffix = f" [{structure_inline}]" if structure_inline else ""
+
+        lines = [f"- {file['filename']} ({size_str}){suffix}"]
+        lines.append(f"  Path: {file['path']}")
+        if file.get("docling_json_virtual_path"):
+            lines.append(f"  Structured: {file['docling_json_virtual_path']}")
+
+        sections = summary.get("sections")
+        if sections:
+            preview = " | ".join(s.get("text", "") for s in sections[:6] if s.get("text"))
+            if preview:
+                lines.append(f"  Sections: {preview}")
+        sheets = summary.get("sheets")
+        if sheets:
+            preview = ", ".join(f"{s.get('name')} ({s.get('rows')}×{s.get('cols')})" for s in sheets[:6])
+            lines.append(f"  Sheets: {preview}")
+
+        lines.append("")
+        return lines
 
     def _files_from_kwargs(self, message: HumanMessage, uploads_dir: Path | None = None) -> list[dict] | None:
         """Extract file info from message additional_kwargs.files.
@@ -106,15 +143,45 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                 continue
             if uploads_dir is not None and not (uploads_dir / filename).is_file():
                 continue
-            files.append(
-                {
-                    "filename": filename,
-                    "size": int(f.get("size") or 0),
-                    "path": f"/mnt/user-data/uploads/{filename}",
-                    "extension": Path(filename).suffix,
-                }
-            )
+            entry = {
+                "filename": filename,
+                "size": int(f.get("size") or 0),
+                "path": f"/mnt/user-data/uploads/{filename}",
+                "extension": Path(filename).suffix,
+            }
+            self._attach_docling_metadata(entry, uploads_dir, raw=f)
+            files.append(entry)
         return files if files else None
+
+    @staticmethod
+    def _attach_docling_metadata(
+        entry: dict[str, Any],
+        uploads_dir: Path | None,
+        *,
+        raw: dict[str, Any] | None = None,
+    ) -> None:
+        """Hydrate the docling sidecar metadata onto a file entry in place.
+
+        Prefers the summary already attached to ``raw`` (passed back by
+        the frontend after upload) but falls back to reading the on-disk
+        ``.docling.summary.json`` so historical uploads also get the
+        structured hint.
+        """
+        if uploads_dir is None:
+            return
+
+        physical_path = uploads_dir / entry["filename"]
+        sibling_json = docling_json_path(physical_path)
+        if sibling_json.is_file():
+            entry["docling_json_virtual_path"] = f"/mnt/user-data/uploads/{sibling_json.name}"
+
+        summary: dict[str, Any] | None = None
+        if raw is not None and isinstance(raw.get("docling_summary"), dict):
+            summary = raw["docling_summary"]
+        if summary is None:
+            summary = load_summary(physical_path)
+        if summary is not None:
+            entry["docling_summary"] = summary
 
     @override
     def before_agent(self, state: UploadsMiddlewareState, runtime: Runtime) -> dict | None:
@@ -152,21 +219,25 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         # Get newly uploaded files from the current message's additional_kwargs.files
         new_files = self._files_from_kwargs(last_message, uploads_dir) or []
 
-        # Collect historical files from the uploads directory (all except the new ones)
+        # Collect historical files from the uploads directory (all except the new ones).
+        # Skip docling sidecars — they're derived artifacts, not user uploads.
         new_filenames = {f["filename"] for f in new_files}
         historical_files: list[dict] = []
         if uploads_dir and uploads_dir.exists():
             for file_path in sorted(uploads_dir.iterdir()):
-                if file_path.is_file() and file_path.name not in new_filenames:
-                    stat = file_path.stat()
-                    historical_files.append(
-                        {
-                            "filename": file_path.name,
-                            "size": stat.st_size,
-                            "path": f"/mnt/user-data/uploads/{file_path.name}",
-                            "extension": file_path.suffix,
-                        }
-                    )
+                if not file_path.is_file() or file_path.name in new_filenames:
+                    continue
+                if is_derived_artifact(file_path):
+                    continue
+                stat = file_path.stat()
+                entry: dict[str, Any] = {
+                    "filename": file_path.name,
+                    "size": stat.st_size,
+                    "path": f"/mnt/user-data/uploads/{file_path.name}",
+                    "extension": file_path.suffix,
+                }
+                self._attach_docling_metadata(entry, uploads_dir)
+                historical_files.append(entry)
 
         if not new_files and not historical_files:
             return None

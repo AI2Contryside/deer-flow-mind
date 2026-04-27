@@ -35,12 +35,11 @@ class OnboardingQuestion:
 
 
 REQUIRED_QUESTIONS: tuple[OnboardingQuestion, ...] = (
-    OnboardingQuestion(
-        id="company_name",
-        question_cn="公司全称是什么?(将作为 ERPNext 的 Company 名称)",
-        question_en="What is the legal company name? (used as the ERPNext Company)",
-        profile_path="facts.company.name",
-    ),
+    # NOTE: ``company_name`` used to live here but is now provided by the
+    # caller — the lead agent injects the tenant's organization name into
+    # the onboarding nudge as ``facts.company.name``, so the subagent must
+    # NOT ask the user for it. See ``lead_agent/prompt.py::_get_onboarding_section``
+    # and ``tenant_onboarding/prompt.py``'s scope block.
     OnboardingQuestion(
         id="company_country",
         question_cn="公司主要经营所在国家?",

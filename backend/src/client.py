@@ -732,12 +732,12 @@ class DeerFlowClient:
             FileNotFoundError: If any file does not exist.
             ValueError: If any supplied path exists but is not a regular file.
         """
-        from src.gateway.routers.uploads import CONVERTIBLE_EXTENSIONS, convert_file_to_markdown
+        from src.utils.document_extract import EXTRACTABLE_EXTENSIONS, extract_with_docling
 
         # Validate all files upfront to avoid partial uploads.
         resolved_files = []
-        convertible_extensions = {ext.lower() for ext in CONVERTIBLE_EXTENSIONS}
-        has_convertible_file = False
+        extractable_extensions = {ext.lower() for ext in EXTRACTABLE_EXTENSIONS}
+        has_extractable_file = False
         for f in files:
             p = Path(f)
             if not p.exists():
@@ -745,27 +745,27 @@ class DeerFlowClient:
             if not p.is_file():
                 raise ValueError(f"Path is not a file: {f}")
             resolved_files.append(p)
-            if not has_convertible_file and p.suffix.lower() in convertible_extensions:
-                has_convertible_file = True
+            if not has_extractable_file and p.suffix.lower() in extractable_extensions:
+                has_extractable_file = True
 
         uploads_dir = self._get_uploads_dir(thread_id)
         uploaded_files: list[dict] = []
 
-        conversion_pool = None
-        if has_convertible_file:
+        extraction_pool = None
+        if has_extractable_file:
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                conversion_pool = None
+                extraction_pool = None
             else:
                 import concurrent.futures
 
                 # Reuse one worker when already inside an event loop to avoid
-                # creating a new ThreadPoolExecutor per converted file.
-                conversion_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                # creating a new ThreadPoolExecutor per extracted file.
+                extraction_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-        def _convert_in_thread(path: Path):
-            return asyncio.run(convert_file_to_markdown(path))
+        def _extract_in_thread(path: Path):
+            return asyncio.run(extract_with_docling(path))
 
         try:
             for src_path in resolved_files:
@@ -780,29 +780,33 @@ class DeerFlowClient:
                     "artifact_url": f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{src_path.name}",
                 }
 
-                if src_path.suffix.lower() in convertible_extensions:
+                if src_path.suffix.lower() in extractable_extensions:
                     try:
-                        if conversion_pool is not None:
-                            md_path = conversion_pool.submit(_convert_in_thread, dest).result()
+                        if extraction_pool is not None:
+                            docling_json_path, summary_path, summary = extraction_pool.submit(_extract_in_thread, dest).result()
                         else:
-                            md_path = asyncio.run(convert_file_to_markdown(dest))
+                            docling_json_path, summary_path, summary = asyncio.run(extract_with_docling(dest))
                     except Exception:
                         logger.warning(
-                            "Failed to convert %s to markdown",
+                            "Failed to extract %s with docling",
                             src_path.name,
                             exc_info=True,
                         )
-                        md_path = None
+                        docling_json_path = summary_path = summary = None
 
-                    if md_path is not None:
-                        info["markdown_file"] = md_path.name
-                        info["markdown_virtual_path"] = f"/mnt/user-data/uploads/{md_path.name}"
-                        info["markdown_artifact_url"] = f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{md_path.name}"
+                    if docling_json_path is not None and summary_path is not None and summary is not None:
+                        info["docling_json_file"] = docling_json_path.name
+                        info["docling_json_virtual_path"] = f"/mnt/user-data/uploads/{docling_json_path.name}"
+                        info["docling_json_artifact_url"] = f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{docling_json_path.name}"
+                        info["docling_summary_file"] = summary_path.name
+                        info["docling_summary_virtual_path"] = f"/mnt/user-data/uploads/{summary_path.name}"
+                        info["docling_summary_artifact_url"] = f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{summary_path.name}"
+                        info["docling_summary"] = summary
 
                 uploaded_files.append(info)
         finally:
-            if conversion_pool is not None:
-                conversion_pool.shutdown(wait=True)
+            if extraction_pool is not None:
+                extraction_pool.shutdown(wait=True)
 
         return {
             "success": True,

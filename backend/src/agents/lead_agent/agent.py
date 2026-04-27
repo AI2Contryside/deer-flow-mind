@@ -306,6 +306,13 @@ def make_lead_agent(config: RunnableConfig):
     raw_tenant_id = cfg.get("tenant_id")
     tenant_id: str | None = str(raw_tenant_id) if raw_tenant_id not in (None, "", 0) else None
 
+    # tenant_name is the user-supplied organization name from the create-tenant
+    # form on the Go side. The lead agent forwards it to the tenant-onboarding
+    # subagent as the ERPNext Company name so the subagent doesn't re-ask the
+    # user. Optional: missing values fall back to subagent's own resolution.
+    raw_tenant_name = cfg.get("tenant_name")
+    tenant_name: str | None = str(raw_tenant_name).strip() if raw_tenant_name not in (None, "") else None
+
     agent_config = load_agent_config(agent_name) if not is_bootstrap else None
     # Custom agent model or fallback to global/default model resolution
     agent_model_name = agent_config.model if agent_config and agent_config.model else _resolve_model_name()
@@ -355,6 +362,7 @@ def make_lead_agent(config: RunnableConfig):
             max_concurrent_subagents=max_concurrent_subagents,
             available_skills=set(["bootstrap"]),
             tenant_id=tenant_id,
+            tenant_name=tenant_name,
         )
 
         return create_agent(
@@ -375,6 +383,7 @@ def make_lead_agent(config: RunnableConfig):
             max_concurrent_subagents=max_concurrent_subagents,
             agent_name=agent_name,
             tenant_id=tenant_id,
+            tenant_name=tenant_name,
         ),
         state_schema=ThreadState,
     )

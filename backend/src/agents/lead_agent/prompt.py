@@ -208,11 +208,22 @@ ignore it and retry the same command, and do not invent a different next step.
 - Output files: `/mnt/user-data/outputs` - Final deliverables must be saved here
 
 **File Management:**
-- Uploaded files are automatically listed in the <uploaded_files> section before each request
-- Use `read_file` tool to read uploaded files using their paths from the list
-- For PDF, PPT, Excel, and Word files, converted Markdown versions (*.md) are available alongside originals
-- All temporary work happens in `/mnt/user-data/workspace`
-- Final deliverables must be copied to `/mnt/user-data/outputs` and presented using `present_file` tool
+- Uploaded files are automatically listed in the <uploaded_files> section before each request,
+  including a one-line structural summary (sheets / slides / sections / table count) so you can
+  decide what to read before reading anything.
+- Use `read_file` tool to read uploaded files using their paths from the list.
+- For PDF / Office files (`.pdf .docx .doc .xlsx .xls .pptx .ppt`) a structured `*.docling.json`
+  sibling is available next to the original. It is the full DoclingDocument JSON: headings with
+  level, tables with `row_span`/`col_span`, formulas as LaTeX, embedded pictures with OCR
+  annotations, slide pages with bounding boxes. Read this when you need cell/heading/table
+  fidelity that markdown would lose. Schema: docling-project/docling-core ``DoclingDocument``.
+- For very large spreadsheets, prefer DuckDB SQL via `duckdb.sql("SELECT ... FROM read_xlsx(path,
+  sheet=, range=)")`, or `pandas.read_excel(..., engine='calamine')`. For huge `.docx` / `.pptx`,
+  use `zipfile` on the OOXML bundle plus `lxml.etree.iterparse` to stream the XML rather than
+  loading the whole document into context. The `.docling.summary.json` sidecar lists row/col
+  counts and slide / section counts up front so you can pick the right strategy.
+- All temporary work happens in `/mnt/user-data/workspace`.
+- Final deliverables must be copied to `/mnt/user-data/outputs` and presented using `present_file` tool.
 </working_directory>
 
 <response_style>
@@ -254,7 +265,7 @@ def _get_profile_context(tenant_id: str | None, *, user_email: str | None = None
         return ""
 
 
-def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool) -> str:
+def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool, tenant_name: str | None = None) -> str:
     """Inject an ``<onboarding_required>`` block when the tenant has no profile.
 
     The block instructs the lead agent to delegate to the
@@ -263,6 +274,11 @@ def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool) ->
       - subagents are enabled (otherwise the ``task`` tool isn't available),
         and
       - ``profile.json`` does not yet exist on disk.
+
+    When ``tenant_name`` is available it is forwarded as the ERPNext company
+    name so the subagent does not have to ask the user for it. The
+    organization name was already collected at tenant creation time on the
+    Go side; re-asking is a known onboarding-survey complaint.
     """
     if not tenant_id or not subagent_enabled:
         return ""
@@ -274,6 +290,13 @@ def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool) ->
     except Exception as exc:
         print(f"Failed to check tenant profile presence: {exc}")
         return ""
+    company_line = ""
+    if tenant_name and tenant_name.strip():
+        company_line = (
+            f"Tenant company name: {tenant_name.strip()}. Pass this verbatim to the subagent in your ``task`` "
+            "prompt as ``Tenant company name: <value>``; the subagent must use it as ``answers['company_name']`` "
+            "and as the ERPNext ``Company`` name and must NOT ask the user for it.\n"
+        )
     return (
         "<onboarding_required>\n"
         f"This tenant ({tenant_id}) has no ``profile.json`` yet. **Your first action this session must be to delegate "
@@ -281,6 +304,7 @@ def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool) ->
         "files in ``/mnt/user-data/uploads``. Do not attempt onboarding work yourself — the subagent owns the channel "
         "selection, ERPNext seeding, and profile composition. Once it returns, resume the user's original request "
         "(or, if onboarding was the original request, simply relay the subagent's final summary).\n"
+        f"{company_line}"
         "</onboarding_required>\n"
     )
 
@@ -387,6 +411,7 @@ def apply_prompt_template(
     agent_name: str | None = None,
     available_skills: set[str] | None = None,
     tenant_id: str | None = None,
+    tenant_name: str | None = None,
     user_email: str | None = None,
 ) -> str:
     # Tenant profile (optional, ahead of memory so the agent reads "who is this
@@ -397,7 +422,7 @@ def apply_prompt_template(
     # subagents are enabled. Sits before profile_context because it's a
     # higher-priority instruction (delegate before reasoning over an empty
     # profile).
-    onboarding_section = _get_onboarding_section(tenant_id, subagent_enabled=subagent_enabled)
+    onboarding_section = _get_onboarding_section(tenant_id, subagent_enabled=subagent_enabled, tenant_name=tenant_name)
 
     # Get memory context
     memory_context = _get_memory_context(agent_name, tenant_id)

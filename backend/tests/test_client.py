@@ -399,10 +399,15 @@ class TestEnsureAgent:
         assert "checkpointer" not in mock_create_agent.call_args.kwargs
 
     def test_reuses_agent_same_config(self, client):
-        """_ensure_agent does not recreate if config key unchanged."""
+        """_ensure_agent does not recreate if config key unchanged.
+
+        The cache key is a 5-tuple of (model_name, thinking_enabled,
+        is_plan_mode, subagent_enabled, tenant_id) — must match the order
+        used in ``DeerFlowClient._ensure_agent`` exactly.
+        """
         mock_agent = MagicMock()
         client._agent = mock_agent
-        client._agent_config_key = (None, True, False, False)
+        client._agent_config_key = (None, True, False, False, None)
 
         config = client._get_runnable_config("t1")
         client._ensure_agent(config)
@@ -696,10 +701,12 @@ class TestUploads:
             created_executors = []
             real_executor_cls = concurrent.futures.ThreadPoolExecutor
 
-            async def fake_convert(path: Path) -> Path:
-                md_path = path.with_suffix(".md")
-                md_path.write_text(f"converted {path.name}")
-                return md_path
+            async def fake_extract(path: Path):
+                json_path = path.with_name(path.stem + ".docling.json")
+                summary_path = path.with_name(path.stem + ".docling.summary.json")
+                json_path.write_text(f'{{"name": "{path.name}"}}')
+                summary_path.write_text("{}")
+                return json_path, summary_path, {"format": path.suffix.lstrip("."), "page_count": 1}
 
             class FakeExecutor:
                 def __init__(self, max_workers: int):
@@ -720,8 +727,8 @@ class TestUploads:
 
             with (
                 patch.object(DeerFlowClient, "_get_uploads_dir", return_value=uploads_dir),
-                patch("src.gateway.routers.uploads.CONVERTIBLE_EXTENSIONS", {".pdf"}),
-                patch("src.gateway.routers.uploads.convert_file_to_markdown", side_effect=fake_convert),
+                patch("src.utils.document_extract.EXTRACTABLE_EXTENSIONS", frozenset({".pdf"})),
+                patch("src.utils.document_extract.extract_with_docling", side_effect=fake_extract),
                 patch("concurrent.futures.ThreadPoolExecutor", FakeExecutor),
             ):
                 result = asyncio.run(call_upload())
@@ -731,8 +738,9 @@ class TestUploads:
             assert len(created_executors) == 1
             assert created_executors[0].max_workers == 1
             assert created_executors[0].shutdown_calls == [True]
-            assert result["files"][0]["markdown_file"] == "first.md"
-            assert result["files"][1]["markdown_file"] == "second.md"
+            assert result["files"][0]["docling_json_file"] == "first.docling.json"
+            assert result["files"][1]["docling_json_file"] == "second.docling.json"
+            assert result["files"][0]["docling_summary"]["format"] == "pdf"
 
     def test_list_uploads(self, client):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1216,8 +1224,8 @@ class TestScenarioAgentRecreation:
 
         agents_created = []
 
-        def fake_ensure(config):
-            key = tuple(config.get("configurable", {}).get(k) for k in ["model_name", "thinking_enabled", "is_plan_mode", "subagent_enabled"])
+        def fake_ensure(config, tenant_id=None):
+            key = tuple(config.get("configurable", {}).get(k) for k in ["model_name", "thinking_enabled", "is_plan_mode", "subagent_enabled", "tenant_id"])
             agents_created.append(key)
             client._agent = agent
 
@@ -1475,15 +1483,16 @@ class TestScenarioEdgeCases:
 
             with (
                 patch.object(DeerFlowClient, "_get_uploads_dir", return_value=uploads_dir),
-                patch("src.gateway.routers.uploads.CONVERTIBLE_EXTENSIONS", {".pdf"}),
-                patch("src.gateway.routers.uploads.convert_file_to_markdown", side_effect=Exception("conversion failed")),
+                patch("src.utils.document_extract.EXTRACTABLE_EXTENSIONS", frozenset({".pdf"})),
+                patch("src.utils.document_extract.extract_with_docling", side_effect=Exception("extraction failed")),
             ):
                 result = client.upload_files("t-pdf-fail", [pdf_file])
 
             assert result["success"] is True
             assert len(result["files"]) == 1
             assert result["files"][0]["filename"] == "doc.pdf"
-            assert "markdown_file" not in result["files"][0]  # Conversion failed gracefully
+            assert "docling_json_file" not in result["files"][0]  # Extraction failed gracefully
+            assert "docling_summary" not in result["files"][0]
             assert (uploads_dir / "doc.pdf").exists()  # File still uploaded
 
 

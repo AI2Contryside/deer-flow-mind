@@ -2,12 +2,16 @@
 
 ## 概述
 
-DeerFlow 后端提供了完整的文件上传功能，支持多文件上传，并自动将 Office 文档和 PDF 转换为 Markdown 格式。
+DeerFlow 后端提供了完整的文件上传功能，支持多文件上传。对于 PDF 和 Office 文档（Word / Excel /
+PowerPoint），会通过 [`docling`](https://github.com/docling-project/docling) 抽取**结构化的
+DoclingDocument JSON**（保留标题层级、表格的行/列跨度、公式、嵌入图片、PPT 页面 bbox 等），
+并落盘一个轻量摘要 sidecar，供 Agent 在读取原始文件之前先看清楚结构。
 
 ## 功能特性
 
 - ✅ 支持多文件同时上传
-- ✅ 自动转换文档为 Markdown（PDF、PPT、Excel、Word）
+- ✅ 自动抽取结构化 JSON（PDF、PPT、Excel、Word）— 替换历史上的 `markitdown → markdown` 流水线
+- ✅ 同时落盘 `*.docling.summary.json` 轻量摘要，方便 Agent 选策略
 - ✅ 文件存储在线程隔离的目录中
 - ✅ Agent 自动感知已上传的文件
 - ✅ 支持文件列表查询和删除
@@ -33,10 +37,20 @@ POST /api/threads/{thread_id}/uploads
       "path": ".deer-flow/threads/{thread_id}/user-data/uploads/document.pdf",
       "virtual_path": "/mnt/user-data/uploads/document.pdf",
       "artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document.pdf",
-      "markdown_file": "document.md",
-      "markdown_path": ".deer-flow/threads/{thread_id}/user-data/uploads/document.md",
-      "markdown_virtual_path": "/mnt/user-data/uploads/document.md",
-      "markdown_artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document.md"
+      "docling_json_file": "document.docling.json",
+      "docling_json_path": ".deer-flow/threads/{thread_id}/user-data/uploads/document.docling.json",
+      "docling_json_virtual_path": "/mnt/user-data/uploads/document.docling.json",
+      "docling_json_artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document.docling.json",
+      "docling_summary_file": "document.docling.summary.json",
+      "docling_summary_virtual_path": "/mnt/user-data/uploads/document.docling.summary.json",
+      "docling_summary": {
+        "format": "pdf",
+        "size_bytes": 1234567,
+        "page_count": 12,
+        "table_count": 3,
+        "picture_count": 5,
+        "sections": [{"level": 1, "text": "Introduction"}, {"level": 2, "text": "Methods"}]
+      }
     }
   ],
   "message": "Successfully uploaded 1 file(s)"
@@ -86,13 +100,18 @@ DELETE /api/threads/{thread_id}/uploads/{filename}
 
 ## 支持的文档格式
 
-以下格式会自动转换为 Markdown：
+以下格式会通过 docling 抽取为结构化 JSON：
 - PDF (`.pdf`)
 - PowerPoint (`.ppt`, `.pptx`)
 - Excel (`.xls`, `.xlsx`)
 - Word (`.doc`, `.docx`)
 
-转换后的 Markdown 文件会保存在同一目录下，文件名为原文件名 + `.md` 扩展名。
+每个原文件会附带两个 sidecar：
+- `<stem>.docling.json` — 完整的 DoclingDocument JSON（顶层包含 `body` / `texts` / `tables` /
+  `pictures` / `pages` / `groups`，每个元素含 `prov`、表格 cell 含 row/col span）
+- `<stem>.docling.summary.json` — 轻量摘要（`format`、`size_bytes`、`page_count`、
+  `table_count`、`picture_count`，加上 docx/pdf 的 `sections`、xlsx 的 `sheets`、pptx 的
+  `slide_count`），UploadsMiddleware 直接读这个文件构造 `<uploaded_files>` 提示
 
 ## Agent 集成
 
@@ -102,28 +121,40 @@ Agent 在每次请求时会自动收到已上传文件的列表，格式如下�
 
 ```xml
 <uploaded_files>
-The following files have been uploaded and are available for use:
+The following files were uploaded in this message:
 
-- document.pdf (1.2 MB)
+- document.pdf (1.2 MB) [pdf, 12 pages, 3 tables, 5 pictures, 2 sections]
   Path: /mnt/user-data/uploads/document.pdf
+  Structured: /mnt/user-data/uploads/document.docling.json
+  Sections: Introduction | Methods
 
-- document.md (45.3 KB)
-  Path: /mnt/user-data/uploads/document.md
-
-You can read these files using the `read_file` tool with the paths shown above.
+Use `read_file` on the path above for plain reads. For PDF / Office files a
+structured `*.docling.json` sibling is available with full DoclingDocument JSON
+(headings, tables with row/col spans, formulas, embedded pictures, page bboxes).
+For very large spreadsheets prefer DuckDB `read_xlsx(path, sheet=, range=)` or
+python-calamine over `pd.read_excel`. For huge .docx / .pptx, stream via
+`zipfile` + `lxml.etree.iterparse` rather than loading into context.
 </uploaded_files>
 ```
 
 ### 使用上传的文件
 
-Agent 在沙箱中运行，使用虚拟路径访问文件。Agent 可以直接使用 `read_file` 工具读取上传的文件：
+Agent 在沙箱中运行，使用虚拟路径访问文件：
 
 ```python
-# 读取原始 PDF（如果支持）
+# 读取原始文件（按需）
 read_file(path="/mnt/user-data/uploads/document.pdf")
 
-# 读取转换后的 Markdown（推荐）
-read_file(path="/mnt/user-data/uploads/document.md")
+# 读取结构化 JSON（含表格 row/col span、heading level、formula LaTeX、picture annotations）
+read_file(path="/mnt/user-data/uploads/document.docling.json")
+
+# 大文件：写 Python，不要把全文塞进 context
+import duckdb
+duckdb.sql("SELECT * FROM read_xlsx('/mnt/user-data/uploads/big.xlsx', sheet='Sales', range='A1:D1000')")
+
+# 也可以用 calamine 加速 pandas
+import pandas as pd
+df = pd.read_excel('/mnt/user-data/uploads/big.xlsx', engine='calamine')
 ```
 
 **路径映射关系：**
@@ -195,10 +226,12 @@ backend/.deer-flow/threads/
 └── {thread_id}/
     └── user-data/
         └── uploads/
-            ├── document.pdf          # 原始文件
-            ├── document.md           # 转换后的 Markdown
+            ├── document.pdf                           # 原始文件
+            ├── document.docling.json                  # 结构化 DoclingDocument JSON
+            ├── document.docling.summary.json          # 轻量摘要（页/表/图计数 + 章节标题）
             ├── presentation.pptx
-            ├── presentation.md
+            ├── presentation.docling.json
+            ├── presentation.docling.summary.json
             └── ...
 ```
 
@@ -214,19 +247,29 @@ backend/.deer-flow/threads/
 
 1. **Upload Router** (`src/gateway/routers/uploads.py`)
    - 处理文件上传、列表、删除请求
-   - 使用 markitdown 转换文档
+   - 通过 `src/utils/document_extract.py` 调用 docling 抽取结构化 JSON
+   - 同步落盘 `*.docling.json` 与 `*.docling.summary.json`，并按需镜像到 OSS
 
-2. **Uploads Middleware** (`src/agents/middlewares/uploads_middleware.py`)
+2. **Document Extract Utility** (`src/utils/document_extract.py`)
+   - `extract_with_docling(path)` — 异步包装，把 `DocumentConverter` 跑在 thread pool
+   - `build_summary(doc, path)` — 仅聚合计数 + 顶层结构标识（含章节标题、sheet 名/行列数、slide 数）
+   - `format_summary_inline(summary)` — 一行结构概览，给 prompt 注入用
+
+3. **Uploads Middleware** (`src/agents/middlewares/uploads_middleware.py`)
    - 在每次 Agent 请求前注入文件列表
-   - 自动生成格式化的文件列表消息
+   - 读取 `*.docling.summary.json` 在 `<uploaded_files>` 块里附结构概览
+   - 自动跳过 docling sidecar，避免 Agent 把派生文件当成用户上传
 
-3. **Nginx 配置** (`nginx.conf`)
+4. **Nginx 配置** (`nginx.conf`)
    - 路由上传请求到 Gateway API
    - 配置大文件上传支持
 
 ### 依赖
 
-- `markitdown>=0.0.1a2` - 文档转换
+- `docling>=2.0.0` - PDF / Office 结构化抽取（替代 markitdown）
+- `python-calamine>=0.2.3` - Rust mmap xlsx 读取，agent 处理大表用
+- `python-docx>=1.1.0` - 与 `python-pptx`、`openpyxl` 一道，给 agent 在沙箱里写 Python 操作 Office 用
+- `duckdb>=1.4.4` - `read_xlsx` 扩展，xlsx-as-SQL（已有）
 - `python-multipart>=0.0.20` - 文件上传处理
 
 ## 故障排查
@@ -238,11 +281,11 @@ backend/.deer-flow/threads/
 3. 检查磁盘空间是否充足
 4. 查看 Gateway 日志：`make gateway`
 
-### 文档转换失败
+### 文档抽取失败
 
-1. 检查 markitdown 是否正确安装：`uv run python -c "import markitdown"`
+1. 检查 docling 是否正确安装：`uv run python -c "import docling"`（首次运行会下载模型，可能耗时）
 2. 查看日志中的具体错误信息
-3. 某些损坏或加密的文档可能无法转换，但原文件仍会保存
+3. 某些损坏或加密的文档可能无法抽取，但原文件仍会保存（最终响应里 `docling_*` 字段会缺失）
 
 ### Agent 看不到上传的文件
 

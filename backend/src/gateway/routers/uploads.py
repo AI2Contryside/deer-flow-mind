@@ -10,6 +10,13 @@ service replicas without depending on the host filesystem.
 OSS mirroring is best-effort: if no ``X-Tenant-ID`` header is present or the
 OSS singleton is unavailable, the route still succeeds with local-only
 storage and the response simply omits ``oss_key`` / ``signed_url`` fields.
+
+For PDF / Office formats the router runs ``docling`` to produce a structured
+``DoclingDocument`` JSON sibling (``<stem>.docling.json``) plus a tiny
+summary sibling (``<stem>.docling.summary.json``). Both are mirrored to OSS
+when tenant context is present. The agent reads the structured JSON when it
+needs cell/heading/table fidelity, or writes Python (openpyxl, calamine,
+DuckDB) directly against the original for very large files.
 """
 
 import json
@@ -30,28 +37,27 @@ from src.storage import (
     sanitize_filename,
     short_uuid,
 )
+from src.utils.document_extract import EXTRACTABLE_EXTENSIONS, extract_with_docling, is_derived_artifact
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/threads/{thread_id}/uploads", tags=["uploads"])
 
-# File extensions that should be converted to markdown
-CONVERTIBLE_EXTENSIONS = {
-    ".pdf",
-    ".ppt",
-    ".pptx",
-    ".xls",
-    ".xlsx",
-    ".doc",
-    ".docx",
-}
+# Re-export under the legacy name so existing call sites (embedded client,
+# tests) continue to work after the markitdown → docling migration.
+CONVERTIBLE_EXTENSIONS = EXTRACTABLE_EXTENSIONS
 
 
 class UploadResponse(BaseModel):
-    """Response model for file upload."""
+    """Response model for file upload.
+
+    File entries carry mostly string values (paths, URLs, sizes serialised
+    as strings) but also a structured ``docling_summary`` dict for office
+    files, so the dict value type must be ``Any``.
+    """
 
     success: bool
-    files: list[dict[str, str]]
+    files: list[dict[str, Any]]
     message: str
 
 
@@ -103,30 +109,14 @@ def _write_manifest(storage: Storage, bucket: str, key: str, manifest: dict[str,
         logger.warning("Failed to write upload manifest %s/%s: %s", bucket, key, exc)
 
 
-async def convert_file_to_markdown(file_path: Path) -> Path | None:
-    """Convert a file to markdown using markitdown.
+async def extract_structured(file_path: Path) -> tuple[Path | None, Path | None, dict[str, Any] | None]:
+    """Run docling on ``file_path`` and write the JSON + summary sidecars.
 
-    Args:
-        file_path: Path to the file to convert.
-
-    Returns:
-        Path to the markdown file if conversion was successful, None otherwise.
+    Returns ``(docling_json_path, summary_path, summary_dict)``. All three
+    are ``None`` when docling is not installed or extraction failed —
+    callers fall back to original-file-only behaviour without raising.
     """
-    try:
-        from markitdown import MarkItDown
-
-        md = MarkItDown()
-        result = md.convert(str(file_path))
-
-        # Save as .md file with same name
-        md_path = file_path.with_suffix(".md")
-        md_path.write_text(result.text_content, encoding="utf-8")
-
-        logger.info(f"Converted {file_path.name} to markdown: {md_path.name}")
-        return md_path
-    except Exception as e:
-        logger.error(f"Failed to convert {file_path.name} to markdown: {e}")
-        return None
+    return await extract_with_docling(file_path)
 
 
 @router.post("", response_model=UploadResponse)
@@ -137,8 +127,10 @@ async def upload_files(
 ) -> UploadResponse:
     """Upload multiple files to a thread's uploads directory.
 
-    For PDF, PPT, Excel, and Word files, they will be converted to markdown using markitdown.
-    All files (original and converted) are saved to /mnt/user-data/uploads.
+    For PDF, PPT, Excel, and Word files, ``docling`` produces a structured
+    ``DoclingDocument`` JSON sibling (``<stem>.docling.json``) plus a tiny
+    summary sibling (``<stem>.docling.summary.json``). All files (original
+    and the docling sidecars) are saved to /mnt/user-data/uploads.
     When the ``X-Tenant-ID`` header is present, files are also mirrored to OSS
     under ``tenants/<tenant>/threads/<thread>/uploads/`` and the per-thread
     manifest is updated so other replicas can hydrate the file on demand.
@@ -229,45 +221,27 @@ async def upload_files(
 
             logger.info(f"Saved file: {safe_filename} ({len(content)} bytes) to {relative_path}")
 
-            # Check if file should be converted to markdown
+            # Run docling on PDF / Office formats to produce structured JSON
+            # plus a tiny summary the lead agent can scan before reading.
             file_ext = file_path.suffix.lower()
-            if file_ext in CONVERTIBLE_EXTENSIONS:
-                md_path = await convert_file_to_markdown(file_path)
-                if md_path:
-                    md_relative_path = str(paths.sandbox_uploads_dir(thread_id) / md_path.name)
-                    md_virtual_path = f"{VIRTUAL_PATH_PREFIX}/uploads/{md_path.name}"
-
-                    if sandbox_id != "local":
-                        sandbox.update_file(md_virtual_path, md_path.read_bytes())
-
-                    file_info["markdown_file"] = md_path.name
-                    file_info["markdown_path"] = md_relative_path
-                    file_info["markdown_virtual_path"] = md_virtual_path
-                    file_info["markdown_artifact_url"] = f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{md_path.name}"
-
-                    if use_oss:
-                        md_oss_key = f"tenants/{tenant_id}/threads/{thread_id}/uploads/{short_uuid()}-{sanitize_filename(md_path.name)}"
-                        try:
-                            storage.put_object(
-                                manifest_bucket,
-                                md_oss_key,
-                                md_path.read_bytes(),
-                                content_type="text/markdown; charset=utf-8",
-                                acl=ACL_PRIVATE,
-                            )
-                            file_info["markdown_oss_key"] = md_oss_key
-                            manifest = _record_in_manifest(
-                                manifest,
-                                {
-                                    "filename": md_path.name,
-                                    "oss_key": md_oss_key,
-                                    "size": md_path.stat().st_size,
-                                    "content_type": "text/markdown; charset=utf-8",
-                                    "derived_from": safe_filename,
-                                },
-                            )
-                        except Exception as exc:
-                            logger.warning("OSS mirror failed for markdown %s: %s", md_path.name, exc)
+            if file_ext in EXTRACTABLE_EXTENSIONS:
+                docling_json_path, summary_path, summary = await extract_structured(file_path)
+                manifest = _mirror_docling_artifacts(
+                    docling_json_path=docling_json_path,
+                    summary_path=summary_path,
+                    summary=summary,
+                    file_info=file_info,
+                    thread_id=thread_id,
+                    paths=paths,
+                    sandbox_id=sandbox_id,
+                    sandbox=sandbox,
+                    storage=storage,
+                    use_oss=use_oss,
+                    tenant_id=tenant_id,
+                    manifest=manifest,
+                    manifest_bucket=manifest_bucket,
+                    safe_filename=safe_filename,
+                )
 
             uploaded_files.append(file_info)
 
@@ -297,6 +271,89 @@ def _record_in_manifest(manifest: dict[str, Any], entry: dict[str, Any]) -> dict
     return {**manifest, "files": files}
 
 
+def _mirror_docling_artifacts(
+    *,
+    docling_json_path: Path | None,
+    summary_path: Path | None,
+    summary: dict[str, Any] | None,
+    file_info: dict[str, Any],
+    thread_id: str,
+    paths: Any,
+    sandbox_id: str,
+    sandbox: Any,
+    storage: Storage | None,
+    use_oss: bool,
+    tenant_id: str,
+    manifest: dict[str, Any],
+    manifest_bucket: str,
+    safe_filename: str,
+) -> dict[str, Any]:
+    """Sync docling sidecars to the sandbox + OSS and enrich ``file_info``.
+
+    Returns the (possibly updated) tenant upload manifest. When extraction
+    failed (any of the docling outputs is ``None``), this is a no-op and
+    the caller continues with original-file-only behaviour.
+    """
+    if docling_json_path is None or summary_path is None or summary is None:
+        return manifest
+
+    file_info["docling_summary"] = summary
+
+    sidecars: list[tuple[Path, str]] = [
+        (docling_json_path, "application/json"),
+        (summary_path, "application/json"),
+    ]
+
+    for sidecar_path, content_type in sidecars:
+        sidecar_relative = str(paths.sandbox_uploads_dir(thread_id) / sidecar_path.name)
+        sidecar_virtual = f"{VIRTUAL_PATH_PREFIX}/uploads/{sidecar_path.name}"
+
+        if sandbox_id != "local":
+            sandbox.update_file(sidecar_virtual, sidecar_path.read_bytes())
+
+        # Two well-known shapes so callers can address either sidecar by
+        # role without scanning the directory.
+        if sidecar_path == docling_json_path:
+            file_info["docling_json_file"] = sidecar_path.name
+            file_info["docling_json_path"] = sidecar_relative
+            file_info["docling_json_virtual_path"] = sidecar_virtual
+            file_info["docling_json_artifact_url"] = f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{sidecar_path.name}"
+        else:
+            file_info["docling_summary_file"] = sidecar_path.name
+            file_info["docling_summary_path"] = sidecar_relative
+            file_info["docling_summary_virtual_path"] = sidecar_virtual
+            file_info["docling_summary_artifact_url"] = f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{sidecar_path.name}"
+
+        if use_oss and storage is not None:
+            sidecar_oss_key = f"tenants/{tenant_id}/threads/{thread_id}/uploads/{short_uuid()}-{sanitize_filename(sidecar_path.name)}"
+            try:
+                storage.put_object(
+                    manifest_bucket,
+                    sidecar_oss_key,
+                    sidecar_path.read_bytes(),
+                    content_type=content_type,
+                    acl=ACL_PRIVATE,
+                )
+                if sidecar_path == docling_json_path:
+                    file_info["docling_json_oss_key"] = sidecar_oss_key
+                else:
+                    file_info["docling_summary_oss_key"] = sidecar_oss_key
+                manifest = _record_in_manifest(
+                    manifest,
+                    {
+                        "filename": sidecar_path.name,
+                        "oss_key": sidecar_oss_key,
+                        "size": sidecar_path.stat().st_size,
+                        "content_type": content_type,
+                        "derived_from": safe_filename,
+                    },
+                )
+            except Exception as exc:
+                logger.warning("OSS mirror failed for docling sidecar %s: %s", sidecar_path.name, exc)
+
+    return manifest
+
+
 @router.get("/list", response_model=dict)
 async def list_uploaded_files(thread_id: str) -> dict:
     """List all files in a thread's uploads directory.
@@ -314,20 +371,25 @@ async def list_uploaded_files(thread_id: str) -> dict:
 
     files = []
     for file_path in sorted(uploads_dir.iterdir()):
-        if file_path.is_file():
-            stat = file_path.stat()
-            relative_path = str(get_paths().sandbox_uploads_dir(thread_id) / file_path.name)
-            files.append(
-                {
-                    "filename": file_path.name,
-                    "size": stat.st_size,
-                    "path": relative_path,  # Actual filesystem path
-                    "virtual_path": f"{VIRTUAL_PATH_PREFIX}/uploads/{file_path.name}",  # Path for Agent in sandbox
-                    "artifact_url": f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{file_path.name}",  # HTTP URL
-                    "extension": file_path.suffix,
-                    "modified": stat.st_mtime,
-                }
-            )
+        if not file_path.is_file():
+            continue
+        # Hide docling sidecars from the user-facing listing — they are
+        # derived artifacts the agent reads on demand, not "uploaded files".
+        if is_derived_artifact(file_path):
+            continue
+        stat = file_path.stat()
+        relative_path = str(get_paths().sandbox_uploads_dir(thread_id) / file_path.name)
+        files.append(
+            {
+                "filename": file_path.name,
+                "size": stat.st_size,
+                "path": relative_path,  # Actual filesystem path
+                "virtual_path": f"{VIRTUAL_PATH_PREFIX}/uploads/{file_path.name}",  # Path for Agent in sandbox
+                "artifact_url": f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{file_path.name}",  # HTTP URL
+                "extension": file_path.suffix,
+                "modified": stat.st_mtime,
+            }
+        )
 
     return {"files": files, "count": len(files)}
 

@@ -457,14 +457,16 @@ Direct access (without nginx):
 
 ### File Upload
 
-Multi-file upload with automatic document conversion:
+Multi-file upload with structured document extraction:
 - Endpoint: `POST /api/threads/{thread_id}/uploads`
-- Supports: PDF, PPT, Excel, Word documents (converted via `markitdown`)
-- Rejects directory inputs before copying so uploads stay all-or-nothing
-- Reuses one conversion worker per request when called from an active event loop
-- Files stored in thread-isolated directories (host filesystem)
-- When the `X-Tenant-ID` header is present, files are also mirrored to Aliyun OSS bucket `trademind-chat-session` under `tenants/<tenant>/threads/<thread>/uploads/<key>`, with a per-thread `_manifest.json` co-located there
-- Agent receives uploaded file list via `UploadsMiddleware`
+- Supports: PDF, PPT, Excel, Word documents — extracted via [`docling`](https://github.com/docling-project/docling) into a `DoclingDocument` JSON sibling (`*.docling.json`) plus a tiny `*.docling.summary.json` (counts + top-level structure: docx/pdf sections, xlsx sheets, pptx slide count). Replaces the legacy `markitdown → markdown` flow that was lossy for tables, formulas, formatting, slide layouts.
+- Extraction code lives in `src/utils/document_extract.py` (`extract_with_docling`, `build_summary`, `format_summary_inline`, `is_derived_artifact`), shared by the gateway router and the embedded `DeerFlowClient`.
+- For very large files the Agent is expected to write Python (DuckDB `read_xlsx`, `python-calamine`, `openpyxl(read_only=True)`, `lxml.etree.iterparse` on the OOXML zip) rather than reading the structured JSON into context — the `<uploaded_files>` prompt block surfaces row/col counts and slide / section counts up-front so the Agent can pick the right strategy.
+- Rejects directory inputs before copying so uploads stay all-or-nothing.
+- Reuses one extraction worker per request when called from an active event loop (embedded client only — the FastAPI route already runs docling on a worker thread via `asyncio.to_thread`).
+- Files stored in thread-isolated directories (host filesystem).
+- When the `X-Tenant-ID` header is present, files are also mirrored to Aliyun OSS bucket `trademind-chat-session` under `tenants/<tenant>/threads/<thread>/uploads/<key>` (originals **and** docling sidecars), with a per-thread `_manifest.json` co-located there.
+- `UploadsMiddleware` skips `*.docling.json` / `*.docling.summary.json` when listing historical uploads — those are derived artifacts, not user uploads — and hydrates the per-file `docling_summary` from the on-disk sidecar when the frontend hasn't passed it back through `additional_kwargs.files`.
 
 See [docs/FILE_UPLOAD.md](docs/FILE_UPLOAD.md) for details.
 

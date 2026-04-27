@@ -133,8 +133,21 @@ def test_required_unanswered_skips_t2_when_dependency_does_not_hold() -> None:
 @pytest.mark.unit
 def test_required_unanswered_treats_empty_string_as_unanswered() -> None:
     answers = {q.id: "x" for q in REQUIRED_QUESTIONS if q.tier == 1}
-    answers["company_name"] = ""
+    # ``company_country`` stands in for any T1 question — the original
+    # ``company_name`` was removed because it's now sourced from the
+    # tenant's organization name on the Go side and never asked here.
+    answers["company_country"] = ""
 
     pending = required_unanswered(answers)
 
-    assert any(q.id == "company_name" for q in pending)
+    assert any(q.id == "company_country" for q in pending)
+
+
+@pytest.mark.unit
+def test_company_name_question_removed_from_bank() -> None:
+    """Regression guard: company_name is provided by the lead agent now,
+    so the subagent must NOT re-ask the user. If this fails, we've
+    accidentally re-introduced the question and onboarding will start
+    asking for the company name even though the tenant already supplied
+    it on the Go-side create-tenant form."""
+    assert all(q.id != "company_name" for q in REQUIRED_QUESTIONS)
