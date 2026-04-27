@@ -257,12 +257,38 @@ def _build_middlewares(config: RunnableConfig, model_name: str | None, agent_nam
     return middlewares
 
 
+def _runtime_context() -> dict:
+    """Per-run context dict, or empty when called outside a run.
+
+    LangGraph 0.6+ moved per-request keys (tenant_id, subagent_enabled,
+    thinking_enabled, …) from ``config.configurable`` to
+    ``runtime.context``. The two are mutually exclusive on the wire — the
+    server returns 400 if both are set. ``make_lead_agent`` is called both
+    at compile time (LangGraph dev startup, no runtime) and per run, so
+    this helper swallows the "no runtime" case.
+    """
+    try:
+        from langgraph.runtime import get_runtime
+
+        runtime = get_runtime()
+    except Exception:
+        return {}
+    ctx = getattr(runtime, "context", None)
+    if isinstance(ctx, dict):
+        return ctx
+    return {}
+
+
 def make_lead_agent(config: RunnableConfig):
     # Lazy import to avoid circular dependency
     from src.tools import get_available_tools
     from src.tools.builtins import setup_agent
 
-    cfg = config.get("configurable", {})
+    # Merge runtime.context (preferred, LangGraph 0.6+) with the legacy
+    # config.configurable (still used by tests and the embedded client). The
+    # context wins on conflicts because it reflects the live request.
+    ctx = _runtime_context()
+    cfg = {**config.get("configurable", {}), **ctx}
 
     thinking_enabled = cfg.get("thinking_enabled", True)
     reasoning_effort = cfg.get("reasoning_effort", None)
