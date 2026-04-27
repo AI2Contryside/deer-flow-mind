@@ -22,6 +22,10 @@ You can delegate independent sub-tasks to the `task` tool, run subagents in para
 **Available subagents:**
 - `general-purpose` — research, analysis, file operations, web work (e.g. pulling supplier prices, comparing freight forwarders, looking up customs / shipping regulations).
 - `bash` — command execution (git, build, test, deploy, scripted CLI calls).
+- `tenant-onboarding` — first-time tenant initialization specialist. Walks the user through Excel upload + Q&A and
+  seeds Company / Warehouse / master data into ERPNext, then writes the v1 ``profile.json``. Use ONLY when this
+  prompt contains an explicit onboarding directive at the top — otherwise the tenant is already onboarded and this
+  subagent must not run.
 
 **Use parallel subagents when** the request decomposes into 2+ independent investigations whose results are joined at
 the end (e.g. compare 3 forwarders, pull quotes from 4 suppliers, audit several outstanding orders, research market
@@ -88,7 +92,7 @@ Remittance slip (水单) · Shipping marks (唛头).
 </trade_domain_knowledge>
 
 {soul}
-{profile_context}{memory_context}
+{onboarding_section}{profile_context}{memory_context}
 
 <thinking_style>
 - Think briefly before acting: what is clear, what is ambiguous, what is missing.
@@ -250,6 +254,37 @@ def _get_profile_context(tenant_id: str | None, *, user_email: str | None = None
         return ""
 
 
+def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool) -> str:
+    """Inject an ``<onboarding_required>`` block when the tenant has no profile.
+
+    The block instructs the lead agent to delegate to the
+    ``tenant-onboarding`` subagent on first contact. We only emit it when:
+      - we have a tenant_id (otherwise we can't safely scope writes), and
+      - subagents are enabled (otherwise the ``task`` tool isn't available),
+        and
+      - ``profile.json`` does not yet exist on disk.
+    """
+    if not tenant_id or not subagent_enabled:
+        return ""
+    try:
+        from src.agents.tenant_profile.store import get_profile_path
+
+        if get_profile_path(tenant_id).exists():
+            return ""
+    except Exception as exc:
+        print(f"Failed to check tenant profile presence: {exc}")
+        return ""
+    return (
+        "<onboarding_required>\n"
+        f"This tenant ({tenant_id}) has no ``profile.json`` yet. **Your first action this session must be to delegate "
+        "to the ``tenant-onboarding`` subagent** via the ``task`` tool, with a brief description of any uploaded "
+        "files in ``/mnt/user-data/uploads``. Do not attempt onboarding work yourself — the subagent owns the channel "
+        "selection, ERPNext seeding, and profile composition. Once it returns, resume the user's original request "
+        "(or, if onboarding was the original request, simply relay the subagent's final summary).\n"
+        "</onboarding_required>\n"
+    )
+
+
 def _get_memory_context(agent_name: str | None = None, tenant_id: str | None = None) -> str:
     """Get memory context for injection into system prompt.
 
@@ -358,6 +393,12 @@ def apply_prompt_template(
     # tenant" before any per-conversation memory is layered on).
     profile_context = _get_profile_context(tenant_id, user_email=user_email)
 
+    # Onboarding nudge: only present when profile.json is missing AND
+    # subagents are enabled. Sits before profile_context because it's a
+    # higher-priority instruction (delegate before reasoning over an empty
+    # profile).
+    onboarding_section = _get_onboarding_section(tenant_id, subagent_enabled=subagent_enabled)
+
     # Get memory context
     memory_context = _get_memory_context(agent_name, tenant_id)
 
@@ -379,6 +420,7 @@ def apply_prompt_template(
         agent_name=agent_name or "DeerFlow 2.0",
         soul=get_agent_soul(agent_name),
         skills_section=skills_section,
+        onboarding_section=onboarding_section,
         profile_context=profile_context,
         memory_context=memory_context,
         subagent_section=subagent_section,
