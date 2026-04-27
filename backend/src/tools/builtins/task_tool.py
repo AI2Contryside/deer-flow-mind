@@ -81,11 +81,22 @@ def task_tool(
     thread_id = None
     parent_model = None
     trace_id = None
+    parent_context: dict = {}
 
     if runtime is not None:
         sandbox_state = runtime.state.get("sandbox")
         thread_data = runtime.state.get("thread_data")
         thread_id = runtime.context.get("thread_id")
+
+        # Snapshot the parent's runtime context so the subagent sees the
+        # same per-user state (most importantly ``erpnext_credentials``,
+        # ``tenant_id``, ``tenant_name``, ``user_id``). Previously this
+        # crossing dropped everything except thread_id, which made
+        # erpnext-cli inside any subagent (notably ``tenant-onboarding``)
+        # fail with ``AuthError`` because the env-var gate in
+        # ``bash_tool._extract_erpnext_env`` saw an empty context.
+        if isinstance(runtime.context, dict):
+            parent_context = dict(runtime.context)
 
         # Try to get parent model from configurable
         metadata = runtime.config.get("metadata", {})
@@ -110,6 +121,7 @@ def task_tool(
         thread_data=thread_data,
         thread_id=thread_id,
         trace_id=trace_id,
+        parent_context=parent_context,
     )
 
     # Start background execution (always async to prevent blocking)

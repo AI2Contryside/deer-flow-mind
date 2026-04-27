@@ -25,6 +25,11 @@ _MOCKED_MODULE_NAMES = [
     "src.agents.thread_state",
     "src.agents.middlewares",
     "src.agents.middlewares.thread_data_middleware",
+    # Pulled in transitively when ``src.subagents.builtins`` registers the
+    # tenant-onboarding subagent (which imports build_system_prompt from
+    # this package). Mocking keeps the executor isolated.
+    "src.agents.tenant_onboarding",
+    "src.agents.tenant_onboarding.prompt",
     "src.sandbox",
     "src.sandbox.middleware",
     "src.models",
@@ -773,3 +778,126 @@ class TestCleanupBackgroundTask:
 
         # Should be removed because completed_at is set
         assert task_id not in executor_module._background_tasks
+
+
+# -----------------------------------------------------------------------------
+# Parent context propagation
+# -----------------------------------------------------------------------------
+
+
+class TestParentContextPropagation:
+    """Pin that ``parent_context`` survives the subagent boundary.
+
+    Regression for: tenant-onboarding subagent failing with AuthError because
+    the executor previously built a fresh ``context = {}`` and only carried
+    ``thread_id`` over from the parent. The gateway injects per-user
+    ``erpnext_credentials`` / ``tenant_id`` into the parent's runtime
+    context, and ``bash_tool`` uses those exact keys to set env vars before
+    invoking ``erpnext-cli``. Dropping them turned every CLI call inside any
+    subagent into ``AuthError: ERPNEXT_URL is not set``.
+    """
+
+    @pytest.mark.anyio
+    async def test_parent_context_forwarded_to_agent_astream(self, classes, base_config, mock_agent, msg):
+        SubagentExecutor = classes["SubagentExecutor"]
+
+        captured: dict = {}
+
+        def capture_astream(*args, **kwargs):
+            captured.update(kwargs)
+            return async_iterator([{"messages": [msg.human("Task"), msg.ai("Done", "msg-1")]}])
+
+        mock_agent.astream = capture_astream
+
+        parent_context = {
+            "tenant_id": "1001",
+            "tenant_name": "Acme Trading Ltd.",
+            "user_id": 42,
+            "erpnext_credentials": {
+                "url": "https://erp.example.com",
+                "api_key": "ak-1",
+                "api_secret": "sk-1",
+                "email": "ops@example.com",
+            },
+        }
+
+        executor = SubagentExecutor(
+            config=base_config,
+            tools=[],
+            thread_id="test-thread",
+            trace_id="test-trace",
+            parent_context=parent_context,
+        )
+
+        with patch.object(executor, "_create_agent", return_value=mock_agent):
+            await executor._aexecute("Task")
+
+        ctx = captured.get("context") or {}
+        # Parent keys must be present verbatim — not just thread_id.
+        assert ctx.get("tenant_id") == "1001"
+        assert ctx.get("tenant_name") == "Acme Trading Ltd."
+        assert ctx.get("user_id") == 42
+        creds = ctx.get("erpnext_credentials")
+        assert isinstance(creds, dict)
+        assert creds.get("api_key") == "ak-1"
+        assert creds.get("api_secret") == "sk-1"
+        # Subagent's own thread_id still wins / is present.
+        assert ctx.get("thread_id") == "test-thread"
+
+    @pytest.mark.anyio
+    async def test_subagent_thread_id_overrides_parent_thread_id(self, classes, base_config, mock_agent, msg):
+        """If the parent context happened to carry a stale ``thread_id``
+        (e.g. because the parent runtime was reused), the subagent's own
+        executor.thread_id wins. The sandbox is keyed off this id so a
+        mismatch would route fs ops to the wrong directory."""
+        SubagentExecutor = classes["SubagentExecutor"]
+
+        captured: dict = {}
+
+        def capture_astream(*args, **kwargs):
+            captured.update(kwargs)
+            return async_iterator([{"messages": [msg.human("Task"), msg.ai("Done", "msg-1")]}])
+
+        mock_agent.astream = capture_astream
+
+        executor = SubagentExecutor(
+            config=base_config,
+            tools=[],
+            thread_id="subagent-thread",
+            trace_id="test-trace",
+            parent_context={"thread_id": "parent-thread", "tenant_id": "1001"},
+        )
+
+        with patch.object(executor, "_create_agent", return_value=mock_agent):
+            await executor._aexecute("Task")
+
+        ctx = captured.get("context") or {}
+        assert ctx.get("thread_id") == "subagent-thread"
+        assert ctx.get("tenant_id") == "1001"
+
+    @pytest.mark.anyio
+    async def test_no_parent_context_yields_only_thread_id(self, classes, base_config, mock_agent, msg):
+        """Backwards-compat: if a caller doesn't pass parent_context (older
+        callers, tests), behaviour matches the pre-fix code — context only
+        contains thread_id."""
+        SubagentExecutor = classes["SubagentExecutor"]
+
+        captured: dict = {}
+
+        def capture_astream(*args, **kwargs):
+            captured.update(kwargs)
+            return async_iterator([{"messages": [msg.human("Task"), msg.ai("Done", "msg-1")]}])
+
+        mock_agent.astream = capture_astream
+
+        executor = SubagentExecutor(
+            config=base_config,
+            tools=[],
+            thread_id="test-thread",
+        )
+
+        with patch.object(executor, "_create_agent", return_value=mock_agent):
+            await executor._aexecute("Task")
+
+        ctx = captured.get("context") or {}
+        assert ctx == {"thread_id": "test-thread"}

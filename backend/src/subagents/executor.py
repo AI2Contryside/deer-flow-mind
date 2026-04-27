@@ -132,6 +132,7 @@ class SubagentExecutor:
         thread_data: ThreadDataState | None = None,
         thread_id: str | None = None,
         trace_id: str | None = None,
+        parent_context: dict | None = None,
     ):
         """Initialize the executor.
 
@@ -143,12 +144,24 @@ class SubagentExecutor:
             thread_data: Thread data from parent agent.
             thread_id: Thread ID for sandbox operations.
             trace_id: Trace ID from parent for distributed tracing.
+            parent_context: Snapshot of the parent agent's runtime context
+                (``tenant_id``, ``tenant_name``, ``user_id``,
+                ``erpnext_credentials``, …). Forwarded into the subagent's
+                ``context`` so per-user state — most importantly the
+                ERPNext credentials the gateway injects — survives the
+                subagent boundary. Without this, ``bash_tool`` running
+                inside the subagent finds an empty ``runtime.context`` and
+                ``erpnext-cli`` invocations fail with ``AuthError`` even
+                though the parent agent had everything it needed.
         """
         self.config = config
         self.parent_model = parent_model
         self.sandbox_state = sandbox_state
         self.thread_data = thread_data
         self.thread_id = thread_id
+        # Shallow-copy so a later mutation by the parent doesn't reach into
+        # the subagent's run, and vice versa.
+        self.parent_context = dict(parent_context) if parent_context else {}
         # Generate trace_id if not provided (for top-level calls)
         self.trace_id = trace_id or str(uuid.uuid4())[:8]
 
@@ -231,7 +244,11 @@ class SubagentExecutor:
             run_config: RunnableConfig = {
                 "recursion_limit": self.config.max_turns,
             }
-            context = {}
+            # Start from the parent agent's context so per-user state
+            # (tenant_id, erpnext_credentials, …) flows into the subagent.
+            # The subagent's own thread_id wins on conflict because the
+            # sandbox has already been routed under that id.
+            context = dict(self.parent_context)
             if self.thread_id:
                 run_config["configurable"] = {"thread_id": self.thread_id}
                 context["thread_id"] = self.thread_id
