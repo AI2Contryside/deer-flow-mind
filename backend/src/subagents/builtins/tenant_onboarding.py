@@ -31,6 +31,14 @@ Do NOT use this subagent:
     # turns than general-purpose. Still bounded so a stuck flow eventually
     # surfaces instead of looping silently.
     max_turns=80,
+    # Explicit superstep budget. Onboarding fans out into the most middleware
+    # work of any subagent (sandbox + uploads + dangling-tool-call +
+    # repeated-tool-failure + clarification on every turn, plus per-turn
+    # bash + erpnext-cli + ask_clarification tool calls). The 5x default
+    # multiplier (= 400) is the floor; we set it explicitly so a future
+    # config tweak to ``max_turns`` doesn't silently shrink the cap below
+    # what the v1 onboarding flow has historically needed.
+    recursion_limit=400,
     # 30 minutes — longer than the 15-min default because the user is in
     # the loop answering questions and we don't want timeouts mid-Q&A.
     timeout_seconds=1800,

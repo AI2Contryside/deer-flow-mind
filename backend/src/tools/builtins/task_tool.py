@@ -23,7 +23,7 @@ def task_tool(
     runtime: ToolRuntime[ContextT, ThreadState],
     description: str,
     prompt: str,
-    subagent_type: Literal["general-purpose", "bash"],
+    subagent_type: Literal["general-purpose", "bash", "tenant-onboarding"],
     tool_call_id: Annotated[str, InjectedToolCallId],
     max_turns: int | None = None,
 ) -> str:
@@ -40,6 +40,11 @@ def task_tool(
       multiple dependent steps, or would benefit from isolated context.
     - **bash**: Command execution specialist for running bash commands. Use for
       git operations, build processes, or when command output would be verbose.
+    - **tenant-onboarding**: First-time tenant initialization specialist. Walks the
+      user through Excel upload + Q&A and seeds Company / Warehouse / master data
+      into ERPNext, then writes the v1 ``profile.json``. Use ONLY when the system
+      prompt contains an ``<onboarding_required>`` directive — otherwise the
+      tenant is already onboarded and this subagent must not run.
 
     When to use this tool:
     - Complex tasks requiring multiple steps or tools
@@ -70,7 +75,12 @@ def task_tool(
         overrides["system_prompt"] = config.system_prompt + "\n\n" + skills_section
 
     if max_turns is not None:
-        overrides["max_turns"] = max_turns
+        # Floor at the configured baseline so an LLM-supplied small value can't
+        # silently shrink a long-running subagent's budget. Onboarding has been
+        # seen to fail with ``Recursion limit of 30 reached`` when the model
+        # passed ``max_turns=30`` (the bash subagent's limit) for a long Q&A +
+        # CLI flow that legitimately needs ~80 turns.
+        overrides["max_turns"] = max(int(max_turns), config.max_turns)
 
     if overrides:
         config = replace(config, **overrides)

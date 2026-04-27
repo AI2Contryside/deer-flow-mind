@@ -18,7 +18,7 @@ from langchain_core.runnables import RunnableConfig
 
 from src.agents.thread_state import SandboxState, ThreadDataState, ThreadState
 from src.models import create_chat_model
-from src.subagents.config import SubagentConfig
+from src.subagents.config import SubagentConfig, resolve_recursion_limit
 
 logger = logging.getLogger(__name__)
 
@@ -241,8 +241,15 @@ class SubagentExecutor:
             state = self._build_initial_state(task)
 
             # Build config with thread_id for sandbox access and recursion limit
+            #
+            # ``max_turns`` is the conversation-turn budget; LangGraph's
+            # ``recursion_limit`` is the superstep budget and is strictly
+            # larger because each turn fans out into multiple supersteps
+            # (middlewares + model + tools). Use ``resolve_recursion_limit``
+            # so the conversion stays in one place and a misconfigured
+            # subagent fails the same way regardless of caller.
             run_config: RunnableConfig = {
-                "recursion_limit": self.config.max_turns,
+                "recursion_limit": resolve_recursion_limit(self.config),
             }
             # Start from the parent agent's context so per-user state
             # (tenant_id, erpnext_credentials, …) flows into the subagent.
