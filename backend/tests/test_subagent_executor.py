@@ -25,11 +25,6 @@ _MOCKED_MODULE_NAMES = [
     "src.agents.thread_state",
     "src.agents.middlewares",
     "src.agents.middlewares.thread_data_middleware",
-    # Pulled in transitively when ``src.subagents.builtins`` registers the
-    # tenant-onboarding subagent (which imports build_system_prompt from
-    # this package). Mocking keeps the executor isolated.
-    "src.agents.tenant_onboarding",
-    "src.agents.tenant_onboarding.prompt",
     "src.sandbox",
     "src.sandbox.middleware",
     "src.models",

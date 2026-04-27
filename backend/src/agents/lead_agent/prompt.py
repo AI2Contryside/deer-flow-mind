@@ -22,10 +22,8 @@ You can delegate independent sub-tasks to the `task` tool, run subagents in para
 **Available subagents:**
 - `general-purpose` — research, analysis, file operations, web work (e.g. pulling supplier prices, comparing freight forwarders, looking up customs / shipping regulations).
 - `bash` — command execution (git, build, test, deploy, scripted CLI calls).
-- `tenant-onboarding` — first-time tenant initialization specialist. Walks the user through Excel upload + Q&A and
-  seeds Company / Warehouse / master data into ERPNext, then writes the v1 ``profile.json``. Use ONLY when this
-  prompt contains an explicit onboarding directive at the top — otherwise the tenant is already onboarded and this
-  subagent must not run.
+
+(First-time tenant onboarding is handled by you directly when this prompt contains an ``<onboarding_required>`` block — do NOT delegate it.)
 
 **Use parallel subagents when** the request decomposes into 2+ independent investigations whose results are joined at
 the end (e.g. compare 3 forwarders, pull quotes from 4 suppliers, audit several outstanding orders, research market
@@ -268,19 +266,30 @@ def _get_profile_context(tenant_id: str | None, *, user_email: str | None = None
 def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool, tenant_name: str | None = None) -> str:
     """Inject an ``<onboarding_required>`` block when the tenant has no profile.
 
-    The block instructs the lead agent to delegate to the
-    ``tenant-onboarding`` subagent on first contact. We only emit it when:
+    The block contains the full first-time-setup spec (channel selection,
+    ERPNext seeding, profile composition) and the lead agent runs it
+    in-thread instead of delegating to a subagent. The previous
+    ``tenant-onboarding`` subagent design was a poor fit for this flow:
+    ``ask_clarification`` only interrupts when ``ClarificationMiddleware``
+    is in the chain, and that middleware is bound to the lead agent only.
+    Inside a subagent the placeholder tool just returned a literal string,
+    the subagent never paused, and the user never saw the question.
+
+    Emitted only when:
       - we have a tenant_id (otherwise we can't safely scope writes), and
-      - subagents are enabled (otherwise the ``task`` tool isn't available),
-        and
       - ``profile.json`` does not yet exist on disk.
 
-    When ``tenant_name`` is available it is forwarded as the ERPNext company
-    name so the subagent does not have to ask the user for it. The
-    organization name was already collected at tenant creation time on the
-    Go side; re-asking is a known onboarding-survey complaint.
+    The ``subagent_enabled`` argument is no longer required by the
+    onboarding flow itself (lead agent uses ``ask_clarification`` /
+    ``bash`` directly), but we keep it in the signature so callers don't
+    break. Onboarding still fires when subagents are off.
+
+    When ``tenant_name`` is available it becomes the ERPNext Company name
+    directly — re-asking is a known onboarding-survey complaint and the
+    Go-side create-tenant form already collected it.
     """
-    if not tenant_id or not subagent_enabled:
+    del subagent_enabled  # no longer gates onboarding
+    if not tenant_id:
         return ""
     try:
         from src.agents.tenant_profile.store import get_profile_path
@@ -290,34 +299,116 @@ def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool, te
     except Exception as exc:
         print(f"Failed to check tenant profile presence: {exc}")
         return ""
-    company_line = ""
-    if tenant_name and tenant_name.strip():
-        company_line = (
-            f"Tenant company name: {tenant_name.strip()}. Pass this verbatim to the subagent in your ``task`` "
-            "prompt as ``Tenant company name: <value>``; the subagent must use it as ``answers['company_name']`` "
-            "and as the ERPNext ``Company`` name and must NOT ask the user for it.\n"
-        )
-    # The subagent NEEDS tenant_id verbatim to write ``profile.json`` to the
-    # right path — the existence of that file is what flips the FE out of the
-    # onboarding screen. We forward it explicitly here (rather than letting
-    # the subagent fish for X-Tenant-ID via env or working-dir tricks) so the
-    # exit condition is deterministic.
-    tenant_id_line = (
-        f"Tenant id: {tenant_id}. Pass this verbatim to the subagent in your ``task`` prompt as "
-        "``Tenant id: <value>``; the subagent must use this exact string when calling ``write_profile`` "
-        "in phase 3 — do NOT improvise.\n"
+
+    # Inline the question bank so the lead agent has the full schema
+    # in front of it. Helper lives in ``tenant_onboarding.prompt`` so the
+    # source of truth stays with the schema.
+    try:
+        from src.agents.tenant_onboarding.prompt import _format_question_bank
+
+        question_bank_block = _format_question_bank()
+    except Exception as exc:
+        print(f"Failed to load onboarding question bank: {exc}")
+        question_bank_block = "(question bank failed to load — ask the user generically)"
+
+    tenant_name_clean = (tenant_name or "").strip()
+    company_line = (
+        f"Tenant company name: {tenant_name_clean} — use this VERBATIM as ``answers['company_name']`` "
+        "and as the ERPNext ``Company`` name. Do NOT ask the user for the company name.\n"
+        if tenant_name_clean
+        else "Tenant company name: <not provided> — fall back to tenant_id and surface a single open_question.\n"
     )
-    return (
-        "<onboarding_required>\n"
-        f"This tenant ({tenant_id}) has no ``profile.json`` yet. **Your first action this session must be to delegate "
-        "to the ``tenant-onboarding`` subagent** via the ``task`` tool, with a brief description of any uploaded "
-        "files in ``/mnt/user-data/uploads``. Do not attempt onboarding work yourself — the subagent owns the channel "
-        "selection, ERPNext seeding, and profile composition. Once it returns, resume the user's original request "
-        "(or, if onboarding was the original request, simply relay the subagent's final summary).\n"
-        f"{tenant_id_line}"
-        f"{company_line}"
-        "</onboarding_required>\n"
-    )
+
+    return f"""<onboarding_required>
+This tenant ({tenant_id}) does not have a ``profile.json`` yet. The desktop client has parked the user on a dedicated init screen and is polling ``/gateway/onboarding/status`` for the file's existence. **Until you write ``profile.json``, first-time setup is your only job.** If the user asks for unrelated work mid-onboarding, finish onboarding first then handle their original request.
+
+Tenant id: {tenant_id} (use this EXACT string in phase 3 ``write_profile`` — do not improvise)
+{company_line}
+<phase_1_channel_selection>
+List ``/mnt/user-data/uploads`` first via ``bash``.
+
+  - **Files present** → Excel/hybrid path. For each upload:
+    * Prefer the structured ``*.docling.json`` sibling for header / table extraction (preserves cell row/col spans, heading levels, per-sheet table boundaries). Fall back to the raw file only if the sidecar is missing. ``*.docling.summary.json`` has up-front row/col counts — read it before the full JSON.
+    * For very large spreadsheets (>50k rows or >20MB), do NOT load the docling JSON into context — write Python (``duckdb.sql("SELECT … FROM read_xlsx(path, sheet=, range=)")``, ``pandas.read_excel(path, engine='calamine')``, or ``openpyxl.load_workbook(path, read_only=True).iter_rows(...)``).
+    * Identify the doctype (Customer / Supplier / Item / Item Price / Warehouse / Account). If ambiguous, call ``ask_clarification`` with the file name and a candidate list — don't guess.
+    * Cap at 200 rows per file in v1 seed; tell the user if you truncate.
+  - **No uploads** → pure Q&A path; walk the question bank below.
+
+Question bank (T1 = mandatory, T2 = conditional, only when depends_on holds):
+{question_bank_block}
+
+Ask T1 questions in **batches of 3-5** via ``ask_clarification`` (``clarification_type="missing_info"``). Never ask one at a time (slow), never all at once (overwhelming). Skip questions whose answer is already implied by an upload. Re-asking already-answered questions is the #1 onboarding-survey complaint — avoid it.
+</phase_1_channel_selection>
+
+<phase_2_erpnext_seeding>
+Use ONLY the ``erpnext-cli`` skill via ``bash``. Read ``/mnt/skills/public/erpnext-cli/SKILL.md`` first if you haven't this session. The CLI handles ``X-Tenant-ID`` and credential injection from env vars the runtime sets — do NOT echo or look for them.
+
+Order matters because ERPNext has hard prerequisites:
+
+  1. ``bootstrap status`` — verify creds + see what masters exist. If this returns ``AuthError`` STOP and surface verbatim; do not retry, do not call ``session login``.
+  2. ``Company`` — name from tenant company name above, currency from ``answers.company_currency``, country from ``answers.company_country``. Idempotent.
+  3. **Default Warehouse** — leaf from ``answers.default_warehouse_leaf`` (defaults to "Stores"). Created under the Company's auto-generated "All Warehouses - <ABBR>".
+  4. **Default Price List** — name from ``answers.default_price_list`` (defaults to "Standard Selling"). Skip if exists.
+  5. **Master data from uploads**, in this exact order (each layer depends on the previous):
+     a. Suppliers (no upstream prereqs)
+     b. Customers (no upstream prereqs)
+     c. Items (uses default Item Group "All Item Groups" if none specified)
+     d. Item Prices (depends on Items + Price List)
+
+For every batch report a short receipt: ``N created, M skipped (already existed), K failed``. Accumulate failed-row reasons into the ``open_questions`` you'll feed to phase 3. Do NOT abort onboarding on partial failure — one bad Customer row must not stop Items.
+
+After 3 consecutive same-error CLI failures, STOP and surface the literal error. The runtime is deliberately non-self-healing.
+</phase_2_erpnext_seeding>
+
+<phase_3_profile_composition>
+Build the ``OnboardingFacts`` payload at ``/mnt/user-data/workspace/onboarding_facts.json``:
+
+  - ``tenant_id`` — the EXACT value at the top of this block ({tenant_id}). Do not parse paths, do not check env, do not guess.
+  - ``answers`` — keyed by ``OnboardingQuestion.id``.
+  - ``imported`` — ``{{doctype: [{{name, ...}}]}}`` of created records.
+  - ``open_questions`` — list of ``{{question, candidates}}`` for failed imports / ambiguous columns.
+
+Then run BOTH compose + write atomically in a single bash command (no commentary between them) so a partial success can't leave inconsistent state:
+
+  python - <<'PY'
+  import json, sys
+  from src.agents.tenant_onboarding import compose_initial_profile, OnboardingFacts
+  from src.agents.tenant_profile.store import write_profile
+  facts = json.load(open('/mnt/user-data/workspace/onboarding_facts.json'))
+  facts['tenant_id'] = "{tenant_id}"
+  profile = compose_initial_profile(OnboardingFacts(**facts))
+  json.dump(profile, open('/mnt/user-data/workspace/profile.json', 'w'),
+            ensure_ascii=False, indent=2)
+  if not write_profile("{tenant_id}", profile):
+      sys.exit('write_profile returned False — check logs for ValueError on tenant_id format')
+  print('WROTE profile.json for tenant {tenant_id}')
+  PY
+
+When ``WROTE profile.json for tenant {tenant_id}`` appears, onboarding is complete and the FE will pick it up on its next status poll (≤5s). Both helpers raise on schema mismatch — if either fails, fix the facts dict and retry; do NOT hand-edit the profile JSON.
+</phase_3_profile_composition>
+
+<termination>
+Onboarding is done when:
+  - All T1 answers are non-empty, AND
+  - Company + default Warehouse exist in ERPNext, AND
+  - ``profile.json`` validates against ``TenantProfile`` and was written via ``write_profile``.
+
+Final message shape:
+
+  ✅ 工作空间初始化完成 for tenant {tenant_id}.
+  - Company: <name> (<currency>, <country>)
+  - Warehouse: <name>
+  - Imported: <N customers, M suppliers, K items, …>
+  - Open questions to resolve later: <count>
+
+If you stop early due to AuthError or repeated CLI failure:
+
+  ⛔ Onboarding stopped. <reason verbatim from CLI>. No profile.json written.
+
+Be concise — onboarding is a setup ritual; long narratives erode trust.
+</termination>
+</onboarding_required>
+"""
 
 
 def _get_memory_context(agent_name: str | None = None, tenant_id: str | None = None) -> str:

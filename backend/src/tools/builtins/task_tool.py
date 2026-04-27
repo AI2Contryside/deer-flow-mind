@@ -23,7 +23,7 @@ def task_tool(
     runtime: ToolRuntime[ContextT, ThreadState],
     description: str,
     prompt: str,
-    subagent_type: Literal["general-purpose", "bash", "tenant-onboarding"],
+    subagent_type: Literal["general-purpose", "bash"],
     tool_call_id: Annotated[str, InjectedToolCallId],
     max_turns: int | None = None,
 ) -> str:
@@ -40,11 +40,11 @@ def task_tool(
       multiple dependent steps, or would benefit from isolated context.
     - **bash**: Command execution specialist for running bash commands. Use for
       git operations, build processes, or when command output would be verbose.
-    - **tenant-onboarding**: First-time tenant initialization specialist. Walks the
-      user through Excel upload + Q&A and seeds Company / Warehouse / master data
-      into ERPNext, then writes the v1 ``profile.json``. Use ONLY when the system
-      prompt contains an ``<onboarding_required>`` directive — otherwise the
-      tenant is already onboarded and this subagent must not run.
+
+    Note: tenant onboarding (Q&A + ERPNext seeding + profile.json) is NOT a
+    subagent any more — the lead agent runs it inline because subagents have
+    no clean way to surface ``ask_clarification`` interrupts back to the user.
+    See ``lead_agent/prompt.py::_get_onboarding_section``.
 
     When to use this tool:
     - Complex tasks requiring multiple steps or tools

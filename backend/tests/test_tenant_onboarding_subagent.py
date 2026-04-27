@@ -1,4 +1,13 @@
-"""Tests for the tenant-onboarding subagent registration + lead-agent nudge."""
+"""Tests for the inline tenant-onboarding flow on the lead agent.
+
+The first-time-setup spec used to live in a dedicated ``tenant-onboarding``
+subagent, but ``ask_clarification`` only interrupts execution when
+``ClarificationMiddleware`` is in the chain — and that middleware is
+bound to the lead agent only. Inside a subagent the placeholder tool just
+returned a literal string and the user never saw the question. The flow
+now lives directly in the lead agent's system prompt under
+``<onboarding_required>``; these tests pin the visible contract.
+"""
 
 from __future__ import annotations
 
@@ -9,51 +18,57 @@ import pytest
 
 
 @pytest.mark.unit
-def test_tenant_onboarding_is_registered() -> None:
+def test_tenant_onboarding_subagent_no_longer_registered() -> None:
+    """Regression guard: after the inline migration, the subagent registry
+    must not list ``tenant-onboarding``. If it comes back, the lead agent
+    will see it in the ``<subagent_system>`` listing and may delegate
+    again — and the user will get the silent-clarification bug back."""
     from src.subagents.builtins import BUILTIN_SUBAGENTS
     from src.subagents.registry import get_subagent_config, get_subagent_names
 
-    assert "tenant-onboarding" in BUILTIN_SUBAGENTS
-    assert "tenant-onboarding" in get_subagent_names()
-
-    cfg = get_subagent_config("tenant-onboarding")
-    assert cfg is not None
-    assert cfg.name == "tenant-onboarding"
+    assert "tenant-onboarding" not in BUILTIN_SUBAGENTS
+    assert "tenant-onboarding" not in get_subagent_names()
+    assert get_subagent_config("tenant-onboarding") is None
 
 
 @pytest.mark.unit
-def test_tenant_onboarding_blocks_recursive_task_calls() -> None:
-    """The subagent must not be able to spawn grandchildren."""
-    from src.subagents.registry import get_subagent_config
-
-    cfg = get_subagent_config("tenant-onboarding")
-    assert cfg is not None
-    assert "task" in (cfg.disallowed_tools or [])
-
-
-@pytest.mark.unit
-def test_tenant_onboarding_inherits_parent_tools() -> None:
-    """We deliberately leave ``tools=None`` so bash, ask_clarification, etc. inherit."""
-    from src.subagents.registry import get_subagent_config
-
-    cfg = get_subagent_config("tenant-onboarding")
-    assert cfg is not None
-    assert cfg.tools is None  # inherit-all
-
-
-@pytest.mark.unit
-def test_lead_agent_injects_onboarding_section_when_profile_missing(tmp_path: Path) -> None:
-    """No profile.json → ``<onboarding_required>`` block appears in the system prompt."""
+def test_lead_agent_inlines_onboarding_phases_when_profile_missing(tmp_path: Path) -> None:
+    """No profile.json → the lead agent's system prompt carries the full
+    inlined spec (channel selection / ERPNext seeding / profile composition)
+    and the tenant_id + company name. Without the inlined spec the lead
+    agent has no instructions and just chats with the user instead of
+    seeding ERPNext."""
     from src.agents.lead_agent.prompt import apply_prompt_template
 
     with patch("src.agents.tenant_profile.store.get_profile_path") as mock_path:
         mock_path.return_value = tmp_path / "missing" / "profile.json"
 
-        prompt = apply_prompt_template(subagent_enabled=True, tenant_id="acme-001")
+        prompt = apply_prompt_template(
+            subagent_enabled=True,
+            tenant_id="acme-001",
+            tenant_name="Acme Trading Ltd.",
+        )
 
-    assert "<onboarding_required>" in prompt
-    assert "tenant-onboarding" in prompt
+    assert "</onboarding_required>" in prompt
+    # tenant_id + company name appear verbatim so the lead agent can
+    # forward them into write_profile / Company creation respectively.
     assert "acme-001" in prompt
+    assert "Acme Trading Ltd." in prompt
+    # All three phases must be present — the spec is now self-contained
+    # in the lead agent prompt, not split across a subagent file.
+    assert "<phase_1_channel_selection>" in prompt
+    assert "<phase_2_erpnext_seeding>" in prompt
+    assert "<phase_3_profile_composition>" in prompt
+    # Phase 1 references ask_clarification (the lead agent has
+    # ClarificationMiddleware so this is the right path; subagents can't
+    # use it).
+    assert "ask_clarification" in prompt
+    # Phase 3 must use write_profile + the print sentinel the FE polls
+    # implicitly via /gateway/onboarding/status.
+    assert "write_profile" in prompt
+    assert "WROTE profile.json" in prompt
+    # Termination bracket so the model knows when to stop.
+    assert "<termination>" in prompt
 
 
 @pytest.mark.unit
@@ -67,22 +82,31 @@ def test_lead_agent_skips_onboarding_section_when_profile_exists(tmp_path: Path)
     with patch("src.agents.tenant_profile.store.get_profile_path", return_value=profile_path):
         prompt = apply_prompt_template(subagent_enabled=True, tenant_id="acme-001")
 
-    assert "<onboarding_required>" not in prompt
+    # The closing tag is unique to the actual onboarding block — the
+    # subagent_section also references the literal ``<onboarding_required>``
+    # opener as documentation, which would otherwise produce a false match.
+    assert "</onboarding_required>" not in prompt
 
 
 @pytest.mark.unit
 def test_lead_agent_skips_onboarding_section_when_no_tenant_id() -> None:
-    """Without a tenant_id we cannot safely scope writes — never inject the nudge."""
+    """Without a tenant_id we can't safely scope writes — never inject."""
     from src.agents.lead_agent.prompt import apply_prompt_template
 
     prompt = apply_prompt_template(subagent_enabled=True, tenant_id=None)
 
-    assert "<onboarding_required>" not in prompt
+    # The closing tag is unique to the actual onboarding block — the
+    # subagent_section also references the literal ``<onboarding_required>``
+    # opener as documentation, which would otherwise produce a false match.
+    assert "</onboarding_required>" not in prompt
 
 
 @pytest.mark.unit
-def test_lead_agent_skips_onboarding_section_when_subagents_disabled(tmp_path: Path) -> None:
-    """With subagents off the ``task`` tool isn't available — don't tell the agent to call it."""
+def test_lead_agent_inlines_onboarding_even_when_subagents_disabled(tmp_path: Path) -> None:
+    """The inlined onboarding flow uses ``ask_clarification`` + ``bash``
+    directly, not the ``task`` tool — so it works regardless of whether
+    subagents are enabled. This is a behavior change from the previous
+    subagent-based flow which required ``subagent_enabled=True``."""
     from src.agents.lead_agent.prompt import apply_prompt_template
 
     with patch("src.agents.tenant_profile.store.get_profile_path") as mock_path:
@@ -90,15 +114,13 @@ def test_lead_agent_skips_onboarding_section_when_subagents_disabled(tmp_path: P
 
         prompt = apply_prompt_template(subagent_enabled=False, tenant_id="acme-001")
 
-    assert "<onboarding_required>" not in prompt
+    assert "</onboarding_required>" in prompt
 
 
 @pytest.mark.unit
-def test_lead_agent_injects_tenant_name_into_onboarding_section(tmp_path: Path) -> None:
-    """tenant_name must appear in the onboarding nudge so the subagent can use
-    it as the ERPNext Company name without re-asking the user. Re-asking was
-    the #1 onboarding-survey complaint and the user-facing init flow on the
-    Go side already collected the value."""
+def test_lead_agent_falls_back_when_company_name_missing(tmp_path: Path) -> None:
+    """Without a tenant_name we still emit onboarding but tell the model
+    to surface a single open_question rather than asking the user."""
     from src.agents.lead_agent.prompt import apply_prompt_template
 
     with patch("src.agents.tenant_profile.store.get_profile_path") as mock_path:
@@ -107,19 +129,8 @@ def test_lead_agent_injects_tenant_name_into_onboarding_section(tmp_path: Path) 
         prompt = apply_prompt_template(
             subagent_enabled=True,
             tenant_id="acme-001",
-            tenant_name="Acme Trading Ltd.",
+            tenant_name=None,
         )
 
-    assert "<onboarding_required>" in prompt
-    assert "Acme Trading Ltd." in prompt
-    # The subagent contract says the company line uses the literal label
-    # "Tenant company name:" so it can pull the value verbatim. Drift here
-    # would silently break the company-name shortcut.
-    assert "Tenant company name: Acme Trading Ltd." in prompt
-    # The subagent also needs ``Tenant id: <value>`` verbatim in the task
-    # prompt so its phase-3 ``write_profile`` lands at the exact path the
-    # FE polls via /gateway/onboarding/status. Without this line the agent
-    # has no reliable way to discover its tenant id, profile.json never
-    # gets written to the right path, and the user stays stuck on the
-    # init screen.
-    assert "Tenant id: acme-001" in prompt
+    assert "</onboarding_required>" in prompt
+    assert "<not provided>" in prompt
