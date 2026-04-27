@@ -297,6 +297,16 @@ def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool, te
             "prompt as ``Tenant company name: <value>``; the subagent must use it as ``answers['company_name']`` "
             "and as the ERPNext ``Company`` name and must NOT ask the user for it.\n"
         )
+    # The subagent NEEDS tenant_id verbatim to write ``profile.json`` to the
+    # right path — the existence of that file is what flips the FE out of the
+    # onboarding screen. We forward it explicitly here (rather than letting
+    # the subagent fish for X-Tenant-ID via env or working-dir tricks) so the
+    # exit condition is deterministic.
+    tenant_id_line = (
+        f"Tenant id: {tenant_id}. Pass this verbatim to the subagent in your ``task`` prompt as "
+        "``Tenant id: <value>``; the subagent must use this exact string when calling ``write_profile`` "
+        "in phase 3 — do NOT improvise.\n"
+    )
     return (
         "<onboarding_required>\n"
         f"This tenant ({tenant_id}) has no ``profile.json`` yet. **Your first action this session must be to delegate "
@@ -304,6 +314,7 @@ def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool, te
         "files in ``/mnt/user-data/uploads``. Do not attempt onboarding work yourself — the subagent owns the channel "
         "selection, ERPNext seeding, and profile composition. Once it returns, resume the user's original request "
         "(or, if onboarding was the original request, simply relay the subagent's final summary).\n"
+        f"{tenant_id_line}"
         f"{company_line}"
         "</onboarding_required>\n"
     )

@@ -116,3 +116,10 @@ def test_lead_agent_injects_tenant_name_into_onboarding_section(tmp_path: Path) 
     # "Tenant company name:" so it can pull the value verbatim. Drift here
     # would silently break the company-name shortcut.
     assert "Tenant company name: Acme Trading Ltd." in prompt
+    # The subagent also needs ``Tenant id: <value>`` verbatim in the task
+    # prompt so its phase-3 ``write_profile`` lands at the exact path the
+    # FE polls via /gateway/onboarding/status. Without this line the agent
+    # has no reliable way to discover its tenant id, profile.json never
+    # gets written to the right path, and the user stays stuck on the
+    # init screen.
+    assert "Tenant id: acme-001" in prompt

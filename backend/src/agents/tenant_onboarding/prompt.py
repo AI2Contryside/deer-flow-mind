@@ -59,6 +59,17 @@ tenant_id and surface a single ``open_question`` rather than blocking the
 flow on it.
 </company_name_is_fixed>
 
+<tenant_id_is_provided>
+The lead agent will also pass ``Tenant id: <value>`` in the ``task`` prompt.
+USE THAT VALUE VERBATIM when calling ``write_profile(tenant_id, ...)`` in
+phase 3. Do NOT try to discover the tenant id by reading ``X-Tenant-ID`` from
+the environment, parsing the working directory, or invoking any CLI — the
+prompt is the canonical source. Writing ``profile.json`` to the wrong path
+strands the user on the init screen indefinitely (the FE polls a tenant-
+scoped status endpoint that only sees the right path), so this MUST be the
+exact string the lead agent gave you.
+</tenant_id_is_provided>
+
 <phase_1_channel_selection>
 List ``/mnt/user-data/uploads`` first. Behaviour:
 
@@ -132,26 +143,43 @@ the literal error. The runtime is deliberately non-self-healing.
 Construct an ``OnboardingFacts`` payload in your scratch workspace
 (e.g. ``/mnt/user-data/workspace/onboarding_facts.json``) with:
 
-  - ``tenant_id`` — the tenant ID from the session (read from
-    ``X-Tenant-ID`` if you can find it, otherwise ask the lead agent for it
-    via the bash sandbox by inspecting the working directory path).
+  - ``tenant_id`` — the EXACT value the lead agent gave you under
+    ``Tenant id:``. Do not parse paths, do not check env, do not guess.
   - ``answers`` — keyed by ``OnboardingQuestion.id``.
   - ``imported`` — dict of doctype → list of created row dicts (each with
     at minimum a ``name`` field).
   - ``open_questions`` — list of {question, candidates} dicts for things you
     couldn't resolve (failed imports, ambiguous Excel columns, etc.).
 
-Then call the helper ``src.agents.tenant_onboarding.composer.compose_initial_profile``
-through bash:
+Then run BOTH steps below in a single bash command (no commentary between
+them) so a successful compose + write happens atomically. The ``--`` switch
+isolates the tenant id so it is passed even when it begins with a digit.
 
-  python -c "import json,sys; from src.agents.tenant_onboarding import compose_initial_profile, OnboardingFacts;
-  facts=json.load(open('/mnt/user-data/workspace/onboarding_facts.json'));
-  print(json.dumps(compose_initial_profile(OnboardingFacts(**facts)), ensure_ascii=False, indent=2))" > /mnt/user-data/workspace/profile.json
+  TID="<paste Tenant id from lead agent verbatim>"
+  python - <<'PY'
+  import json, sys
+  from src.agents.tenant_onboarding import compose_initial_profile, OnboardingFacts
+  from src.agents.tenant_profile.store import write_profile
+  import os
+  facts = json.load(open('/mnt/user-data/workspace/onboarding_facts.json'))
+  tid = os.environ['TID']
+  # tenant_id in the facts payload must match the write_profile target;
+  # composer uses it for ``profile.tenant_id``.
+  facts['tenant_id'] = tid
+  profile = compose_initial_profile(OnboardingFacts(**facts))
+  json.dump(profile, open('/mnt/user-data/workspace/profile.json', 'w'),
+            ensure_ascii=False, indent=2)
+  ok = write_profile(tid, profile)
+  if not ok:
+      sys.exit('write_profile returned False — check logs for ValueError on tenant_id format')
+  print(f'WROTE profile.json for tenant {tid}')
+  PY
 
-Then write that file to the tenant profile directory by importing the store:
-
-  python -c "import json; from src.agents.tenant_profile.store import write_profile;
-  write_profile('<TENANT_ID>', json.load(open('/mnt/user-data/workspace/profile.json'))) or sys.exit(1)"
+After the command prints ``WROTE profile.json for tenant <id>``, onboarding
+is complete and you must return the final summary message described in
+``<termination>`` below — the FE detects completion by polling the same
+profile.json path the ``write_profile`` helper just wrote to, so until the
+print line appears the user is still parked on the init screen.
 
 Both helpers raise on schema mismatch — if either fails, fix the facts dict
 and retry; do NOT hand-edit the profile JSON to coerce it past validation.
