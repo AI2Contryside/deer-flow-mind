@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from langchain.tools import tool
 
@@ -15,6 +15,7 @@ def ask_clarification_tool(
     ],
     context: str | None = None,
     options: list[str] | None = None,
+    fields: list[dict[str, Any]] | None = None,
 ) -> str:
     """Ask the user for clarification when you need more information to proceed.
 
@@ -43,11 +44,48 @@ def ask_clarification_tool(
     - For risky operations, ALWAYS ask for confirmation
     - After calling this tool, execution will be interrupted automatically
 
+    Frontend rendering hints:
+    - When `clarification_type` is `risk_confirmation` and no `options`/`fields`
+      are given, the UI renders a Confirm/Cancel button pair.
+    - When `options` is set, the UI renders a single- or multi-select list.
+    - When `fields` is set, the UI renders a structured form (one input per
+      field) — use this whenever you need several discrete pieces of
+      information in one turn (e.g. name + age + email). Prefer `fields` over
+      a single comma-listed `question` — it gives the user labeled inputs and
+      an unambiguous answer schema.
+    - When neither `options` nor `fields` is set, the UI renders a free-text
+      reply box. The frontend will also try a heuristic split of the question
+      into fields, but supplying `fields` explicitly is far more reliable.
+
+    `fields` schema — each entry is a dict with these keys:
+        `label` (string, REQUIRED): the field name shown to the user.
+        `key` (string): submission key, defaults to `label`.
+        `type` (string): one of "text" (default), "textarea", "number", "date",
+            "email", "select", "multiselect", "boolean".
+        `placeholder` (string): hint text inside the input.
+        `description` (string): help text shown below the label.
+        `options` (list of strings): choices for select / multiselect.
+        `required` (boolean): whether the user must fill it. Default false.
+
+    Example `fields` payload — collecting tenant onboarding info::
+
+        [
+            {"label": "公司名称", "type": "text", "required": true},
+            {"label": "成立年份", "type": "number", "placeholder": "如 2018"},
+            {"label": "主要市场", "type": "multiselect",
+             "options": ["北美", "欧洲", "东南亚", "中东"]},
+            {"label": "是否有 ERPNext 经验", "type": "boolean"}
+        ]
+
+    Use `fields` whenever the question would otherwise read
+    "请提供 A、B、C…" — it produces a labeled form rather than one free-text box.
+
     Args:
         question: The clarification question to ask the user. Be specific and clear.
         clarification_type: The type of clarification needed (missing_info, ambiguous_requirement, approach_choice, risk_confirmation, suggestion).
         context: Optional context explaining why clarification is needed. Helps the user understand the situation.
         options: Optional list of choices (for approach_choice or suggestion types). Present clear options for the user to choose from.
+        fields: Optional list of structured field definitions; see the schema and example above. Pass this when you need multiple discrete inputs in one turn so the UI can render a form.
     """
     # This is a placeholder implementation
     # The actual logic is handled by ClarificationMiddleware which intercepts this tool call

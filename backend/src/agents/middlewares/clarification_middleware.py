@@ -46,6 +46,12 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
     def _format_clarification_message(self, args: dict) -> str:
         """Format the clarification arguments into a user-friendly message.
 
+        The output is the canonical text representation a non-widget client
+        (older frontend, IM channel) sees in chat history. Modern clients pull
+        the structured args from the gateway's tool_invocation_start event and
+        render a widget instead — but they still receive this text via the
+        ToolMessage so we keep both paths in sync.
+
         Args:
             args: The tool call arguments containing clarification details
 
@@ -56,6 +62,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         clarification_type = args.get("clarification_type", "missing_info")
         context = args.get("context")
         options = args.get("options", [])
+        fields = args.get("fields") or []
 
         # Type-specific icons
         type_icons = {
@@ -85,6 +92,38 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             message_parts.append("")  # blank line for spacing
             for i, option in enumerate(options, 1):
                 message_parts.append(f"  {i}. {option}")
+
+        # Render structured form fields as a labeled list. This is the text
+        # fallback for clients without the form widget; the rich widget reads
+        # the same data structure from args_preview and ignores this block.
+        if fields and isinstance(fields, list):
+            message_parts.append("")
+            for f in fields:
+                if not isinstance(f, dict):
+                    continue
+                label = str(f.get("label") or "").strip()
+                if not label:
+                    continue
+                ftype = str(f.get("type") or "text")
+                required_mark = " *" if f.get("required") else ""
+                line = f"  · {label}{required_mark}"
+                # Append type / option hint so a plain-text reader still
+                # understands what's expected. Keep it inline & short.
+                hint_parts = []
+                if ftype not in ("text", "textarea", ""):
+                    hint_parts.append(ftype)
+                opts = f.get("options")
+                if isinstance(opts, list) and opts:
+                    short = "/".join(str(o) for o in opts[:5])
+                    if len(opts) > 5:
+                        short += "/…"
+                    hint_parts.append(f"选项：{short}")
+                desc = str(f.get("description") or "").strip()
+                if desc:
+                    hint_parts.append(desc)
+                if hint_parts:
+                    line += f"（{'；'.join(hint_parts)}）"
+                message_parts.append(line)
 
         return "\n".join(message_parts)
 
