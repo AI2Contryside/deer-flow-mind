@@ -136,6 +136,8 @@ services:
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_ROOT}/backend/.deer-flow
       - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_ROOT}/skills
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal
+      # See docker-compose.yaml for the rationale; keep dev parity at 50.
+      - LANGGRAPH_DEFAULT_RECURSION_LIMIT=${LANGGRAPH_DEFAULT_RECURSION_LIMIT:-50}
     env_file:
       - ../.env
     extra_hosts:

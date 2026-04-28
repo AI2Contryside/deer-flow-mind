@@ -169,6 +169,56 @@ Common gotchas pinned from real failures:
 --items-file /mnt/user-data/uploads/items.json
 ```
 
+The CLI accepts the human-friendly field name **`rate`** in every command
+group. For `selling` / `buying` it goes through to the Sales Order /
+Purchase Order child row as-is. For `stock` (`receipt` / `issue` /
+`transfer`), the CLI promotes `rate` → `basic_rate` and sets
+`set_basic_rate_manually: 1` automatically — Stock Entry Detail's
+writable per-item price is `basic_rate`, not `rate` (which is a
+computed column).
+
+### Stock Entry rate / valuation gotchas
+
+ERPNext's accounting layer enforces a non-zero valuation rate for every
+item that hits a Stock Entry. There are three independent rate concepts
+on a Stock Entry Detail row, and confusing them costs round-trips:
+
+| Field | Meaning | Who sets it |
+|---|---|---|
+| `basic_rate` | Per-item cost on this row, in company currency. **Writable.** | You (via `--items-json … "rate": 99.5` or `"basic_rate": 99.5`). |
+| `set_basic_rate_manually` | If `1`, ERPNext keeps your `basic_rate`; if `0`, it overwrites with Item master's `valuation_rate`. | CLI sets to `1` automatically when you pass `rate`. |
+| `valuation_rate` (on Item master) | Default cost ERPNext falls back to when the row has no manual rate. | `doc update Item <code> --data '{"valuation_rate": 11.5}'` before the receipt. |
+
+Failure modes you'll hit if these aren't set:
+
+- **"要为此 Stock Entry 生成会计凭证，请先在物料主数据中维护成本价"** /
+  *"Please maintain valuation rate in item master before submitting"*
+  — both `basic_rate` on the row and `valuation_rate` on the Item are
+  zero. Fix: pass `rate` (or `basic_rate`) on every row, **or** seed
+  `valuation_rate` on the Item master first.
+- **Submitted draft has all rates back to 0** — you passed `basic_rate`
+  but no `set_basic_rate_manually`, and ERPNext overwrote with the
+  Item's zero `valuation_rate`. The CLI handles this for you when you
+  go through `stock receipt` / `stock issue` / `stock transfer`; raw
+  `doc insert "Stock Entry"` does not.
+- **Genuinely zero-cost items** (samples, write-offs) — set
+  `allow_zero_valuation_rate: 1` on the row (or on the Item master) to
+  bypass the accounting check. Don't reach for this casually; it
+  silently zeroes inventory cost.
+
+Recommended bulk-receipt pattern (avoids 4-5 round-trips of trial and
+error):
+
+```bash
+python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json stock receipt \
+    --items-json '[
+        {"item_code":"WIDGET-001","qty":1400,"rate":11.5},
+        {"item_code":"BOLT-M8","qty":50,"rate":0.25},
+        {"item_code":"FREEBIE-007","qty":10,"rate":0,"allow_zero_valuation_rate":1}
+    ]' \
+    --target "Stores - ACME" --company "ACME"
+```
+
 ## Examples
 
 ### 1. Full order-to-cash in one call

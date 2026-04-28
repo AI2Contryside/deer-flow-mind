@@ -61,10 +61,7 @@ def test_to_internal_dict_retains_url_for_logs() -> None:
 
 @pytest.mark.unit
 def test_message_strips_authorization_token() -> None:
-    raw = (
-        "Upstream rejected request: curl -H 'Authorization: token b7f7419b3bb9fc1:bbe0bce22f13719' "
-        "failed with 500"
-    )
+    raw = "Upstream rejected request: curl -H 'Authorization: token b7f7419b3bb9fc1:bbe0bce22f13719' failed with 500"
     err = ServerError(raw, status_code=500, payload={"url": "http://10.37.31.108:8000/foo"})
     public_msg = err.to_dict()["message"]
     assert "b7f7419b3bb9fc1" not in public_msg
@@ -194,11 +191,19 @@ def test_notfound_error_targets_link_when_present() -> None:
 def test_auth_error_does_not_suggest_retry() -> None:
     err = classify_http_error(401, "token rejected", url="http://10.0.0.1/x")
     actions = err.to_dict()["next_actions"]
-    # b987fdbe's failure mode involved retrying with curl after the CLI
-    # complained — the next_actions field must steer the agent toward
-    # session inspection, not retry.
-    assert any("session status" in a["action"] for a in actions)
-    assert not any("retry" in a["action"].lower() for a in actions)
+    # Two failure modes this guards against:
+    # - b987fdbe-...: the agent retried with curl after the CLI complained.
+    #   `next_actions` must not invite retry of any kind.
+    # - 09417ecf precursor: the harness now retries cookie-based auth
+    #   transparently before surfacing AuthError, so by the time this
+    #   error reaches the agent, "check session status" is the wrong
+    #   advice — the only correct path is escalating to the user. The
+    #   action surface therefore must include an "ask user" action and
+    #   must NOT suggest re-running session status (which would just
+    #   loop).
+    assert any("ask user" in a["action"] for a in actions), actions
+    assert not any("session status" in a["action"] for a in actions), actions
+    assert not any("retry" in a["action"].lower() for a in actions), actions
 
 
 @pytest.mark.unit

@@ -27,6 +27,18 @@ def _items_for_transfer(items: list, source: str | None, target: str | None) -> 
     rows: list[dict] = []
     for it in normalize_items(items):
         r = dict(it)
+        # Stock Entry Detail's writable per-item price is ``basic_rate``;
+        # ``rate`` is a computed column ERPNext recomputes from
+        # ``basic_rate`` × ``conversion_factor`` × FX. If the caller
+        # passed the more intuitive ``rate`` (matching what selling /
+        # buying commands accept), promote it to ``basic_rate`` and mark
+        # ``set_basic_rate_manually=1`` so ERPNext won't overwrite it
+        # from the Item master's valuation_rate. Pinned to thread
+        # 0bc19732-... where the model burned ~5 supersteps reading the
+        # CLI source code to discover this mapping.
+        if "rate" in r and "basic_rate" not in r:
+            r["basic_rate"] = r.pop("rate")
+            r.setdefault("set_basic_rate_manually", 1)
         if source: r.setdefault("s_warehouse", source)
         if target: r.setdefault("t_warehouse", target)
         rows.append(r)

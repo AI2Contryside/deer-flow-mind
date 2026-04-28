@@ -103,6 +103,12 @@ services:
       # Disable LangSmith tracing — LANGSMITH_API_KEY is not required.
       # Set LANGCHAIN_TRACING_V2=true and LANGSMITH_API_KEY in .env to enable.
       - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-false}
+      # langgraph_api defaults this to 25 (langgraph_api/utils/config.py:44),
+      # which is too tight for multi-stage ERPNext flows (xlsx parse →
+      # bootstrap probe → field discovery → stock receipt + retries).
+      # Real failures (thread 0bc19732-...) needed ~30 supersteps; bumping
+      # to 50 leaves headroom while still bounding runaway loops.
+      - LANGGRAPH_DEFAULT_RECURSION_LIMIT=${LANGGRAPH_DEFAULT_RECURSION_LIMIT:-50}
     env_file:
       - ../.env
     extra_hosts:
