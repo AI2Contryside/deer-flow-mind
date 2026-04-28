@@ -39,7 +39,19 @@ DEFAULT_SESSION_DIR = Path(os.environ.get(
     str(Path.home() / ".cli-anything-erpnext"),
 ))
 SESSION_FILE = DEFAULT_SESSION_DIR / "session.json"
+COOKIE_JAR_FILE = DEFAULT_SESSION_DIR / "cookies.json"
 HISTORY_MAX = 50
+
+
+def cookie_jar_for(session_path: Path) -> Path:
+    """Cookie jar path that lives next to ``session_path``.
+
+    Keeping cookies in a sidecar file (rather than inline in
+    ``session.json``) means we can persist them on every successful login
+    without rewriting the whole session document and without leaking
+    cookies into ``session status`` JSON output.
+    """
+    return session_path.parent / "cookies.json"
 
 
 @dataclass
@@ -74,6 +86,10 @@ class Session:
     context: Context = field(default_factory=Context)
     history: list[dict] = field(default_factory=list)
     dirty: bool = False
+    # Path the session was loaded from. Used to locate the sidecar cookie
+    # jar so a user-supplied ``--session-file`` keeps its cookies in the
+    # same directory. Excluded from ``asdict`` output via ``redacted()``.
+    source_path: Path | None = None
 
     # ── Persistence ───────────────────────────────────────────────────
 
@@ -81,11 +97,12 @@ class Session:
     def load(cls, path: Path = SESSION_FILE) -> "Session":
         """Load session from disk. Returns a fresh Session if file is missing."""
         if not path.is_file():
-            return cls()
+            return cls(source_path=path)
         raw = json.loads(path.read_text(encoding="utf-8"))
         ctx_raw = raw.pop("context", {}) or {}
         raw.pop("dirty", None)
-        return cls(context=Context(**ctx_raw), **raw)
+        raw.pop("source_path", None)
+        return cls(context=Context(**ctx_raw), source_path=path, **raw)
 
     def save(self, path: Path = SESSION_FILE) -> Path:
         """Atomically save session to disk.
@@ -95,6 +112,7 @@ class Session:
         path.parent.mkdir(parents=True, exist_ok=True)
         data = asdict(self)
         data.pop("dirty", None)
+        data.pop("source_path", None)
         if not self.save_credentials:
             data["api_secret"] = None
             data["password"] = None
@@ -120,7 +138,12 @@ class Session:
 
     # ── Connection ────────────────────────────────────────────────────
 
-    def client(self, tenant_id: str | None = None) -> FrappeClient:
+    def client(
+        self,
+        tenant_id: str | None = None,
+        *,
+        cookie_jar_path: Path | None = None,
+    ) -> FrappeClient:
         """Build a live ``FrappeClient`` from this session's credentials.
 
         Env vars override session values so CI and agents can inject
@@ -128,6 +151,13 @@ class Session:
         same rule: explicit argument wins, then ``ERPNEXT_TENANT_ID`` env
         var. Tenant is deliberately not stored in the on-disk session file —
         it is a per-invocation scope, not a per-user setting.
+
+        ``cookie_jar_path`` (optional) lets the client cache Frappe session
+        cookies across CLI invocations so username/password auth doesn't
+        re-hit ``/api/method/login`` every time. The default is the
+        sidecar file next to ``SESSION_FILE``. Token-auth callers can pass
+        ``cookie_jar_path=None`` explicitly — there are no cookies worth
+        persisting.
 
         Raises ``AuthError`` if no tenant can be resolved: every ERPNext
         call must carry ``X-Tenant-ID`` per CLAUDE.md. Empty strings are
@@ -151,16 +181,27 @@ class Session:
                 "command or set ERPNEXT_TENANT_ID before invoking the CLI."
             )
         verify_ssl = os.environ.get("ERPNEXT_VERIFY_SSL", "1") != "0" and self.verify_ssl
-        c = FrappeClient(
+        # Token auth is stateless; only username/password mode benefits
+        # from cookie persistence. Skipping the jar for token auth keeps
+        # the on-disk surface minimal. When the session was loaded from a
+        # custom path, the cookie jar lives next to it so a per-tenant
+        # ``--session-file`` keeps its cookies in the same directory.
+        if api_key and api_secret:
+            jar = None
+        elif cookie_jar_path is not None:
+            jar = cookie_jar_path
+        elif self.source_path is not None:
+            jar = cookie_jar_for(self.source_path)
+        else:
+            jar = COOKIE_JAR_FILE
+        return FrappeClient(
             url,
             api_key=api_key, api_secret=api_secret,
             username=username, password=password,
             tenant_id=tenant,
             verify_ssl=verify_ssl,
+            cookie_jar_path=jar,
         )
-        if not (api_key and api_secret) and username and password:
-            c.login()
-        return c
 
     # ── Mutators (immutable-style: return a new Session) ──────────────
 
@@ -181,6 +222,7 @@ class Session:
             context=new_ctx,
             history=list(self.history),
             dirty=True,
+            source_path=self.source_path,
         )
         return cloned
 
@@ -204,6 +246,7 @@ class Session:
             context=Context(**asdict(self.context)),
             history=new_history,
             dirty=True,
+            source_path=self.source_path,
         )
         return cloned
 
@@ -236,4 +279,5 @@ class Session:
         if d.get("password"):
             d["password"] = "***"
         d.pop("dirty", None)
+        d.pop("source_path", None)
         return d

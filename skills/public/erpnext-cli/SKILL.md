@@ -1,7 +1,7 @@
 
 ---
 name: erpnext-cli
-description: Use this skill to drive a running ERPNext / Frappe site end-to-end — quote-to-cash, procure-to-pay, material transfer, journal entries, BOM → work order → finish, lead → customer. Every domain command wraps ERPNext's native `make_*` chain methods, returns a typed JSON envelope (`{ok, data, error, next_actions}`), and submits documents by default (matching what the GUI's "Create → X" button produces). The harness pre-provisions credentials per tenant — agents call `session status` to verify, never `session login`. Ten command groups: bootstrap, session, selling, buying, stock, accounts, manufacturing, crm, hr, doc.
+description: Use this skill to drive a running ERPNext / Frappe site end-to-end — quote-to-cash, procure-to-pay, material transfer, journal entries, BOM → work order → finish, lead → customer. Every domain command wraps ERPNext's native `make_*` chain methods, returns a typed JSON envelope (`{ok, data, error, next_actions}`), and submits documents by default (matching what the GUI's "Create → X" button produces). The CLI auto-authenticates from harness-injected credentials and persists session cookies — invoke domain commands directly, no upfront `session status` probe needed. Ten command groups: bootstrap, session, selling, buying, stock, accounts, manufacturing, crm, hr, doc.
 ---
 
 # erpnext-cli
@@ -25,24 +25,29 @@ python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json <group> <command
 > `{"ok": true, "data": ...}` on success,
 > `{"ok": false, "error": {"error": "<ClassName>", "message": "..."}}` on failure.
 
-### Authentication (harness-managed)
+### Authentication (harness-managed, auto-applied)
 
 **Inside the DeerFlow harness, credentials are pre-provisioned per tenant
 and injected only when this CLI launcher runs.** Agents do not see the
-URL, API key, or API secret — and must not look for them. The full auth
-flow agents need is exactly this:
+URL, API key, or API secret — and must not look for them.
 
-```bash
-python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json session status
-```
+**You do not need to verify auth before every command.** The CLI:
 
-- `ok: true` → authenticated. Note any `data.context.company` /
-  `default_warehouse` / `default_currency` defaults that apply to every
-  subsequent command. Proceed.
-- `ok: false` with `error.error == "AuthError"` → the harness did not
-  inject credentials for this tenant (the user is not provisioned).
-  **Surface this to the user and stop.** Do **not** call `session login`,
-  do **not** prompt for an API key, and do **not** retry.
+- Picks up harness-injected credentials automatically on every
+  invocation (token mode → stateless `Authorization: token …` header;
+  username/password mode → cached session cookies in
+  `~/.cli-anything-erpnext/cookies.json`).
+- Transparently re-logs-in once if the cached session has expired
+  (single retry on 401/403, then it surfaces the error).
+- Returns a typed `AuthError` envelope **only** when the harness genuinely
+  failed to inject credentials for this tenant — i.e. the user is not
+  provisioned.
+
+**The right flow is: invoke the domain command directly.** If the
+response is `{"ok": false, "error": {"error": "AuthError", ...}}`,
+**surface that to the user and stop** — do not call `session login`, do
+not prompt for an API key, do not retry. `session status` is still
+available for debugging, but it is no longer a required preflight step.
 
 **Forbidden inside the harness:**
 
@@ -58,8 +63,9 @@ python /mnt/skills/public/erpnext-cli/scripts/erpnext.py --json session status
 
 > **Standalone-CLI mode** (running this CLI outside the DeerFlow harness,
 > e.g. from a developer shell) supports `session login` and the
-> `ERPNEXT_*` env vars. Those paths are **not** for agent use and are
-> intentionally unreachable from the in-harness sandbox.
+> `ERPNEXT_*` env vars. After one `session login` the cookie jar is
+> reused on subsequent invocations. Those paths are **not** for agent use
+> and are intentionally unreachable from the in-harness sandbox.
 
 ## Command groups
 
@@ -291,7 +297,7 @@ re-run the same command. The table below is a fallback summary in case
 
 | `error.error`      | Meaning                                   | Agent action                                                                                                                  |
 | ------------------ | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `AuthError`        | Harness did not inject credentials        | Surface to the user and stop. **Never** call `session login` or prompt for an API key inside the harness.                     |
+| `AuthError`        | Harness did not inject credentials, or transparent re-login failed | Surface to the user and stop. **Never** call `session login` or prompt for an API key inside the harness. The CLI already retried once before surfacing this. |
 | `NotFoundError`    | DocType / record doesn't exist            | `doc list <DocType>` to confirm spelling; if the tenant is empty, run `bootstrap status` first.                               |
 | `ValidationError`  | Frappe rejected the payload               | Read `next_actions` for the missing field name; ask the user for that value rather than inventing one.                        |
 | `PermissionError_` | User lacks the required role              | Surface to the user — the agent cannot escalate its own role.                                                                 |

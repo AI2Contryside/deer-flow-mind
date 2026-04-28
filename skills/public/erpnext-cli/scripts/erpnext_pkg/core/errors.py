@@ -123,11 +123,16 @@ class ERPNextError(Exception):
 
 
 class AuthError(ERPNextError):
-    """Authentication or session error."""
+    """Authentication or session error.
+
+    By the time this surfaces, the client has already attempted a
+    transparent re-login (for username/password mode) or confirmed that
+    no harness-injected credentials are usable. The agent should escalate,
+    not retry.
+    """
 
     default_next_actions = [
-        {"action": "session status", "reason": "确认凭证是否仍有效"},
-        {"action": "ask user", "reason": "如确实失效, 提示用户重新授权; 不要自行重试"},
+        {"action": "ask user", "reason": "凭证缺失或失效; 提示用户重新授权, 不要自行重试或调用 session login"},
     ]
 
 

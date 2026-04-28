@@ -7,8 +7,19 @@ import json
 import click
 
 from ..core.errors import AuthError
-from ..core.session import SESSION_FILE, Session
+from ..core.session import SESSION_FILE, Session, cookie_jar_for
 from ._output import emit, run_safely
+
+
+def _purge_cookie_jar(session_path) -> None:
+    """Delete the sidecar cookie file. Best-effort — missing file is fine."""
+    jar = cookie_jar_for(session_path)
+    try:
+        jar.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
 
 
 @click.group()
@@ -40,6 +51,7 @@ def login(ctx, url, api_key, api_secret, username, password,
         username=username, password=password,
         save_credentials=save_credentials,
         verify_ssl=not no_verify_ssl,
+        source_path=ctx.obj["session_file"],
     )
 
     def _verify():
@@ -65,8 +77,10 @@ def logout(ctx):
         verify_ssl=s.verify_ssl,
         context=s.context,
         history=s.history,
+        source_path=path,
     )
     cleared.save(path)
+    _purge_cookie_jar(path)
     emit(ctx, {"cleared": True, "url_kept": s.url})
 
 
@@ -125,4 +139,5 @@ def clear(ctx):
     path = ctx.obj["session_file"]
     if path.is_file():
         path.unlink()
+    _purge_cookie_jar(path)
     emit(ctx, {"deleted": str(path)})

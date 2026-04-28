@@ -18,12 +18,23 @@ Two modes, both first-class:
 The client follows HARNESS.md's "fail loudly and clearly" rule: every
 non-2xx response is classified into a typed error (see ``core.errors``)
 so agents can decide whether to retry, re-auth, or surface to the user.
+
+Auto-login & cookie persistence
+-------------------------------
+For username/password auth the client persists Frappe's session cookies
+to ``cookie_jar_path`` (a JSON file). On construction, cookies are
+restored from disk so subsequent CLI invocations skip the
+``/api/method/login`` round-trip. If a request returns 401/403 the
+client transparently re-logs-in once (when credentials are available)
+and retries — so the agent never has to chase auth state itself.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import tempfile
+from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urljoin
 
@@ -53,6 +64,7 @@ class FrappeClient:
         tenant_id: str | None = None,
         timeout: int = DEFAULT_TIMEOUT,
         verify_ssl: bool = True,
+        cookie_jar_path: Path | None = None,
     ):
         # Tenant scoping is mandatory per CLAUDE.md: every ERPNext call
         # originating from DeerFlow must carry X-Tenant-ID. The server uses
@@ -78,12 +90,22 @@ class FrappeClient:
         self._password = password
         self._tenant_id = normalized_tenant
         self._logged_in = False
+        self._cookie_jar_path = Path(cookie_jar_path) if cookie_jar_path else None
+        # Reentrancy guard so a 401 during a re-login retry can't recurse.
+        self._reauth_in_flight = False
 
         if api_key and api_secret:
             self._session.headers["Authorization"] = f"token {api_key}:{api_secret}"
         self._session.headers.setdefault("Accept", "application/json")
         self._session.headers.setdefault("X-Frappe-CLI", "cli-anything-erpnext")
         self._session.headers["X-Tenant-ID"] = normalized_tenant
+
+        # Token auth is stateless — no cookies to persist. Username/password
+        # auth survives across CLI invocations only if we hydrate the cookie
+        # jar from disk; otherwise every command pays the /api/method/login
+        # round-trip even though the previous session is still valid.
+        if not (api_key and api_secret):
+            self._load_cookies()
 
     @property
     def tenant_id(self) -> str | None:
@@ -103,7 +125,73 @@ class FrappeClient:
             tenant_id=tenant_id,
             timeout=self.timeout,
             verify_ssl=self._session.verify,
+            cookie_jar_path=self._cookie_jar_path,
         )
+
+    # ── Cookie persistence (username/password mode only) ──────────────
+
+    def _load_cookies(self) -> None:
+        """Restore Frappe session cookies from disk into the requests.Session.
+
+        Best-effort: a missing or malformed file leaves the jar empty so
+        the next request triggers a fresh login. Cookies are scoped per
+        ``(url, tenant_id)`` so switching tenants doesn't leak sessions.
+        """
+        path = self._cookie_jar_path
+        if not path or not path.is_file():
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        scope_key = self._cookie_scope_key()
+        bucket = raw.get(scope_key) if isinstance(raw, dict) else None
+        if not isinstance(bucket, dict):
+            return
+        for name, value in bucket.items():
+            if isinstance(value, str):
+                self._session.cookies.set(name, value)
+
+    def _save_cookies(self) -> None:
+        """Atomically persist current session cookies to disk."""
+        path = self._cookie_jar_path
+        if not path:
+            return
+        scope_key = self._cookie_scope_key()
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+            if not isinstance(existing, dict):
+                existing = {}
+        except (OSError, ValueError):
+            existing = {}
+        existing[scope_key] = {c.name: c.value for c in self._session.cookies}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            prefix=".cookies.", suffix=".json.tmp", dir=path.parent,
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(existing, f, indent=2, sort_keys=True)
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+    def _cookie_scope_key(self) -> str:
+        """Cookie bucket key — one bucket per (url, tenant) so concurrent
+        tenants don't clobber each other's sessions."""
+        return f"{self.url}|{self._tenant_id or ''}"
+
+    def _can_relogin(self) -> bool:
+        """True iff we have credentials to re-establish a session."""
+        return bool(self._username and self._password)
 
     # ── Auth ──────────────────────────────────────────────────────────
 
@@ -125,6 +213,7 @@ class FrappeClient:
         if resp.status_code != 200:
             raise classify_http_error(resp.status_code, _body(resp), resp.url)
         self._logged_in = True
+        self._save_cookies()
         return _body(resp) or {"message": "Logged In"}
 
     def logout(self) -> None:
@@ -135,6 +224,8 @@ class FrappeClient:
             )
         finally:
             self._logged_in = False
+            self._session.cookies.clear()
+            self._save_cookies()
 
     def ping(self) -> dict:
         """Sanity-check the connection + auth. Returns the currently
@@ -265,6 +356,32 @@ class FrappeClient:
             timeout=self.timeout,
         )
         body = _body(resp)
+        # Transparent re-login: if Frappe rejects an expired/missing session
+        # cookie and we still have username/password on hand, log in once
+        # and replay the request. Token auth never reaches this branch
+        # (its 401s are real permission failures, not session expiry).
+        if (
+            resp.status_code in (401, 403)
+            and not self._reauth_in_flight
+            and self._can_relogin()
+        ):
+            self._reauth_in_flight = True
+            try:
+                self.login()
+            except ERPNextError:
+                # Re-login itself failed — surface the *original* error so the
+                # agent sees the operation it actually attempted, not a login
+                # call it never asked for.
+                raise classify_http_error(resp.status_code, body, url)
+            finally:
+                self._reauth_in_flight = False
+            resp = self._session.request(
+                method, url,
+                params=params,
+                data=form if form is not None else json_body,
+                timeout=self.timeout,
+            )
+            body = _body(resp)
         if resp.status_code >= 400:
             raise classify_http_error(resp.status_code, body, url)
         if isinstance(body, dict):
@@ -289,7 +406,7 @@ def _q(s: str) -> str:
 
 # ── Convenience constructor ───────────────────────────────────────────
 
-def client_from_env() -> FrappeClient:
+def client_from_env(cookie_jar_path: Path | None = None) -> FrappeClient:
     """Build a client from env vars. Used by the CLI when no session exists.
 
     Env vars:
@@ -319,4 +436,5 @@ def client_from_env() -> FrappeClient:
         password=os.environ.get("ERPNEXT_PASSWORD"),
         tenant_id=tenant,
         verify_ssl=os.environ.get("ERPNEXT_VERIFY_SSL", "1") != "0",
+        cookie_jar_path=cookie_jar_path,
     )
