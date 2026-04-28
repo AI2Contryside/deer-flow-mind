@@ -7,6 +7,7 @@ from langchain_core.runnables import RunnableConfig
 from src.agents.lead_agent.prompt import apply_prompt_template
 from src.agents.middlewares.clarification_middleware import ClarificationMiddleware
 from src.agents.middlewares.memory_middleware import MemoryMiddleware
+from src.agents.middlewares.safe_summarization_middleware import SafeSummarizationMiddleware
 from src.agents.middlewares.repeated_tool_failure_middleware import RepeatedToolFailureMiddleware
 from src.agents.middlewares.subagent_limit_middleware import SubagentLimitMiddleware
 from src.agents.middlewares.title_middleware import TitleMiddleware
@@ -76,7 +77,12 @@ def _create_summarization_middleware() -> SummarizationMiddleware | None:
     if config.summary_prompt is not None:
         kwargs["summary_prompt"] = config.summary_prompt
 
-    return SummarizationMiddleware(**kwargs)
+    # SafeSummarizationMiddleware overrides before_model to refuse to wipe
+    # thread state when the summarizer falls back to a sentinel string
+    # (see src/agents/middlewares/safe_summarization_middleware.py for
+    # context). Behaviourally identical to SummarizationMiddleware on the
+    # happy path; safer on the failure path.
+    return SafeSummarizationMiddleware(**kwargs)
 
 
 def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:

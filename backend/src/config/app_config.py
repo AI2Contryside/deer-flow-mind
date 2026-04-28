@@ -15,6 +15,7 @@ from src.config.skills_config import SkillsConfig
 from src.config.subagents_config import load_subagents_config_from_dict
 from src.config.summarization_config import load_summarization_config_from_dict
 from src.config.title_config import load_title_config_from_dict
+from src.config.tool_output_config import load_tool_output_config_from_dict
 from src.config.tool_config import ToolConfig, ToolGroupConfig
 
 load_dotenv()
@@ -85,6 +86,12 @@ class AppConfig(BaseModel):
         # Load summarization config if present
         if "summarization" in config_data:
             load_summarization_config_from_dict(config_data["summarization"])
+
+        # Load tool output truncation config if present
+        if "tool_output" in config_data and isinstance(config_data["tool_output"], dict):
+            truncation_data = config_data["tool_output"].get("truncation")
+            if isinstance(truncation_data, dict):
+                load_tool_output_config_from_dict(truncation_data)
 
         # Load memory config if present
         if "memory" in config_data:

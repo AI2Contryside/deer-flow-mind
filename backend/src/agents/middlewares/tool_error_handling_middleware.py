@@ -26,10 +26,7 @@ class ToolErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         if len(detail) > 500:
             detail = detail[:497] + "..."
 
-        content = (
-            f"Error: Tool '{tool_name}' failed with {exc.__class__.__name__}: {detail}. "
-            "Continue with available context, or choose an alternative tool."
-        )
+        content = f"Error: Tool '{tool_name}' failed with {exc.__class__.__name__}: {detail}. Continue with available context, or choose an alternative tool."
         return ToolMessage(
             content=content,
             tool_call_id=tool_call_id,
@@ -94,6 +91,18 @@ def _build_runtime_middlewares(
         middlewares.append(DanglingToolCallMiddleware())
 
     middlewares.append(ToolErrorHandlingMiddleware())
+
+    # ToolOutputTruncationMiddleware must come *after* ToolErrorHandlingMiddleware
+    # so even error ToolMessages (which can carry large stack traces / payloads)
+    # get capped. Disabled-by-default; opt in via config.tool_output.truncation.
+    from src.agents.middlewares.tool_output_truncation_middleware import (
+        ToolOutputTruncationMiddleware,
+    )
+    from src.config.tool_output_config import get_tool_output_config
+
+    if get_tool_output_config().enabled:
+        middlewares.append(ToolOutputTruncationMiddleware())
+
     return middlewares
 
 

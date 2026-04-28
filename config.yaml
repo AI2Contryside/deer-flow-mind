@@ -237,27 +237,58 @@ summarization:
   # init time. Stick to absolute tokens / messages until model profiles are
   # wired up in src/models/factory.py.
   #
-  # 40000 ≈ 62% of DeepSeek-v4-flash's 64K window — late enough that the
-  # ERPNext flow (xlsx parse + SKILL.md + bash calls) doesn't summarize
-  # mid-task, early enough to leave headroom for the next turn.
+  # Sized for a 1M-token model window (DeepSeek-v4-flash 1M variant).
+  # 400000 ≈ 40% of the window — late enough that the ERPNext flow
+  # (xlsx parse + SKILL.md + bash calls + tenant profile injection)
+  # doesn't summarize mid-task, early enough that the current turn still
+  # has 60% of the window to work in. Bumped from the legacy 64K-window
+  # value of 40000 (occupied 62% of a 64K window).
   trigger:
     - type: tokens
-      value: 40000
+      value: 400000
 
   # Context retention policy after summarization. Token-based so a turn full of
   # tiny tool pings doesn't get treated the same as a turn full of huge JSON
-  # tool_results.
+  # tool_results. 80000 ≈ 20% of the trigger budget — enough to keep several
+  # full tool round-trips intact without re-summarizing on the next call.
   keep:
     type: tokens
-    value: 8000
+    value: 80000
 
-  # Maximum tokens to keep when preparing messages for summarization
-  # Set to null to skip trimming (not recommended for very long conversations)
-  trim_tokens_to_summarize: 15564
+  # Maximum tokens to keep when preparing messages for summarization.
+  # MUST be ≥ (trigger - keep) so the summarizer never has to drop messages
+  # — when trim returns an empty list, langchain's SummarizationMiddleware
+  # falls back to a placeholder string and (without our SafeSummarization
+  # wrapper) wipes the entire history. With trigger=400K and keep=80K, the
+  # span to summarize is at most 320K tokens; we set this exactly there.
+  # See thread 09417ecf-... for the failure mode this guards against.
+  trim_tokens_to_summarize: 320000
 
   # Custom summary prompt template (null = use default LangChain prompt)
   # The prompt should guide the model to extract important context
   summary_prompt: null
+
+# ============================================================================
+# Tool Output Handling
+# ============================================================================
+# Cap any single ToolMessage at a fixed character size and spill the original
+# payload to a file inside the sandbox workspace, so summarization can never
+# be sabotaged by a single oversized message. Pinned to thread
+# 09417ecf-b0e0-470f-ae3d-244a0b1ba74d where one giant docling+xlsx response
+# made trim_messages return [], which collapsed the entire thread history.
+tool_output:
+  truncation:
+    enabled: true
+    # 60000 chars ≈ 20K tokens — well below trim_tokens_to_summarize (320000)
+    # so even a 16-call burst of max-size tool responses fits in one summary.
+    max_chars: 60000
+    keep_head_chars: 12000
+    keep_tail_chars: 8000
+    # Subdirectory under /mnt/user-data/workspace where the original payloads land.
+    spill_dir: ".tool_outputs"
+    # Tool names exempt from truncation. Add tools whose output is already
+    # bounded / structured (e.g. view_image) — empty by default.
+    skip_tool_names: []
 
 # ============================================================================
 # Memory Configuration
