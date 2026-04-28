@@ -11,6 +11,28 @@ See [SKILL.md](./SKILL.md) for the canonical agent contract (JSON
 envelope, typed errors, command catalog). Below is a human-oriented
 summary.
 
+## Discovering commands: `help`
+
+Every CLI command has an LLM-friendly help record. The shape is
+designed for agent parsing but it's also the fastest human reference:
+
+```bash
+# All groups, with one-line summary + business process for each
+python .../erpnext.py --json help
+
+# Every command in a group, with summaries
+python .../erpnext.py --json help selling
+
+# Full per-command spec — arguments, options (type, required, default,
+# choices), output schema, working examples, and common errors with
+# concrete fixes
+python .../erpnext.py --json help selling order-to-cash
+```
+
+The parameter schema is auto-extracted from Click (so it never drifts
+from the actual code) and merged with hand-curated business context
+that lives in `cli_groups/_help_data.py`.
+
 ## Invocation
 
 Inside the DeerFlow sandbox, the skill is mounted at
@@ -81,7 +103,7 @@ environment inside the sandbox. By embedding as a DeerFlow skill:
 
 ```
 erpnext-cli/
-├── SKILL.md              # agent contract (frontmatter + catalog)
+├── SKILL.md              # agent contract (process map + help-first directive)
 ├── README.md             # this file
 ├── scripts/
 │   ├── erpnext.py        # thin launcher — mutates sys.path, calls cli.main
@@ -90,6 +112,10 @@ erpnext-cli/
 │       ├── core/         # FrappeClient (REST + RPC), Session, typed errors
 │       ├── domains/      # business-process logic (pure, no Click)
 │       ├── cli_groups/   # Click wrappers per domain
+│       │   ├── help_group.py        # the `help` command
+│       │   ├── _help_data.py        # curated per-command metadata
+│       │   ├── _help_introspect.py  # Click → JSON parameter introspection
+│       │   └── …                    # bootstrap / session / selling / …
 │       └── utils/        # REPL theming
 └── references/
     └── ERPNEXT.md        # catalog of ERPNext make_* chain methods

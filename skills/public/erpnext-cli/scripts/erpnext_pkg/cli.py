@@ -20,6 +20,7 @@ from .cli_groups import (
     buying_group,
     crm_group,
     doc_group,
+    help_group,
     hr_group,
     manufacturing_group,
     repl_group,
@@ -58,11 +59,18 @@ def cli(ctx: click.Context, json_mode: bool, session_file: str | None,
     Authenticate once with ``session login`` then reuse the session.
     """
     path = Path(session_file) if session_file else SESSION_FILE
+    # ``help`` is a meta-command that introspects the CLI itself — it must
+    # remain reachable even if the session file is corrupt or missing.
+    # Fall back to a fresh in-memory Session for help; surface the load
+    # error for every other subcommand as before.
+    is_help = ctx.invoked_subcommand == "help"
     try:
         sess = Session.load(path)
-    except Exception as e:  # noqa: BLE001 — bad session file = fatal
-        emit_error(ctx, e)
-        return
+    except Exception as e:  # noqa: BLE001 — bad session file = fatal for non-help
+        if not is_help:
+            emit_error(ctx, e)
+            return
+        sess = Session(source_path=path)
 
     # Propagate tenant id via env so Session.client() picks it up without
     # every cli_groups/*.py callsite needing to thread it through. Setting
@@ -95,6 +103,7 @@ cli.add_command(accounts_group.group, name="accounts")
 cli.add_command(manufacturing_group.group, name="manufacturing")
 cli.add_command(crm_group.group, name="crm")
 cli.add_command(hr_group.group, name="hr")
+cli.add_command(help_group.help_cmd, name="help")
 cli.add_command(repl_group.repl)
 
 
