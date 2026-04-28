@@ -17,6 +17,7 @@ foreground flow and we don't want it spawning grandchildren.
 
 from __future__ import annotations
 
+from src.agents.concealment import VENDOR_CONCEALMENT_BLOCK
 from src.agents.tenant_onboarding.question_bank import REQUIRED_QUESTIONS
 
 
@@ -131,12 +132,16 @@ list of failed-row reasons in the ``open_questions`` you'll feed to the
 composer in Phase 3. Do NOT abort onboarding on partial failure — failure
 of one Customer row must not stop Items from loading.
 
-If the CLI returns an ``AuthError`` envelope at any point, STOP. Surface
-the error verbatim and end the run. Do not retry, do not ask the user for
-credentials — the harness owns auth.
+If the CLI returns an ``AuthError`` envelope at any point, STOP. Tell the user
+(in product-neutral language per ``<vendor_concealment>``) that their workspace
+is not yet provisioned, quote the bare error code ``AuthError`` so they can
+cite it in support, and end the run. Do not retry, do not ask the user for
+credentials, do not paste the raw envelope or the words "ERPNext" /
+"erpnext-cli" — the harness owns auth.
 
-After three consecutive same-error failures from the CLI, STOP and surface
-the literal error. The runtime is deliberately non-self-healing.
+After three consecutive same-error failures from the CLI, STOP and surface a
+one-line product-neutral explanation plus the bare error code. The runtime is
+deliberately non-self-healing.
 </phase_2_erpnext_seeding>
 
 <phase_3_profile_composition>
@@ -188,13 +193,15 @@ and retry; do NOT hand-edit the profile JSON to coerce it past validation.
 <termination>
 Onboarding is done when:
   - All T1 answers are non-empty, AND
-  - Company + default Warehouse exist in ERPNext, AND
+  - The Company and default Warehouse records exist in the back-office, AND
   - ``profile.json`` validates against ``TenantProfile`` and is written to
     the tenant profile directory.
 
-Return a final message in this shape:
+Return a final message in this shape. Use neutral product-facing language per
+``<vendor_concealment>`` — do NOT name the back-office stack and do NOT paste
+the raw CLI envelope to the user:
 
-  ✅ Onboarding complete for tenant <ID>.
+  ✅ Workspace setup complete.
   - Company: <name> (<currency>, <country>)
   - Warehouse: <name>
   - Imported: <N customers, M suppliers, K items, ...>
@@ -202,11 +209,13 @@ Return a final message in this shape:
 
 If you stop early due to AuthError or repeated failure, return:
 
-  ⛔ Onboarding stopped. <reason verbatim from CLI>. No profile.json written.
+  ⛔ Setup stopped. <one-line product-neutral reason>. (Code: <bare error code from CLI, e.g. AuthError>)
 
 Be concise. Onboarding is a setup ritual; long narratives erode trust.
 </termination>
-""".replace("{QUESTION_BANK}", _format_question_bank())
+
+{VENDOR_CONCEALMENT_BLOCK}
+""".replace("{QUESTION_BANK}", _format_question_bank()).replace("{VENDOR_CONCEALMENT_BLOCK}", VENDOR_CONCEALMENT_BLOCK)
 
 
 def build_system_prompt() -> str:

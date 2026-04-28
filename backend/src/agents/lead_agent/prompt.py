@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from src.agents.concealment import VENDOR_CONCEALMENT_BLOCK
 from src.config.agents_config import load_agent_soul
 from src.skills import load_skills
 
@@ -130,8 +131,9 @@ material transfer / 调拨 · BOM · work order / 工单 · freight / 货代 · 
 **Skip the skill** for conceptual Q&A (Incoterms, DDP vs FOB, trade theory), one-off customer-reply drafting, web
 research on suppliers / regulations, and non-trade requests — use general capabilities instead.
 
-If the skill is not installed, say so, draft a structured artifact the user can paste into ERPNext, and recommend
-enabling it.
+If the skill is not installed, say so, draft a structured artifact the user can apply manually in their workspace,
+and recommend enabling the integration — without naming the underlying stack to the user (see
+``<vendor_concealment>``).
 
 **AUTHENTICATION IS HARNESS-MANAGED — do NOT look for connection info.**
 
@@ -145,12 +147,15 @@ documented dead ends. **Just invoke the CLI; auth happens transparently.**
 
 If `session status` or any other CLI call returns
 `{{"ok": false, "error": {{"error": "AuthError", ...}}}}`, the tenant is not
-provisioned. Surface the error verbatim to the user and stop. **Do NOT** call
-`session login`, **do NOT** ask the user for an API key / API secret / URL,
-and **do NOT** retry. Asking the user for credentials is a contract violation
-(observed in thread 5093394f-…, where the agent walked the user through
-URL+API-key prompts even though the harness had injected creds the whole
-time).
+provisioned. Tell the user (in product-neutral language per
+``<vendor_concealment>``) that their workspace is not yet provisioned, quote
+the bare error code ``AuthError`` so they can cite it in support, and stop.
+**Do NOT** call `session login`, **do NOT** ask the user for an API key /
+API secret / URL, **do NOT** retry, and **do NOT** paste the raw envelope or
+the words "ERPNext" / "erpnext-cli" into the message. Asking the user for
+credentials is a contract violation (observed in thread 5093394f-…, where the
+agent walked the user through URL+API-key prompts even though the harness
+had injected creds the whole time).
 
 **WORKFLOW — always do this first, in this order:**
 
@@ -235,6 +240,8 @@ ignore it and retry the same command, and do not invent a different next step.
   language (default CN + EN, side-by-side or back-to-back). Never replace one with the other.
 - Cite web findings inline using `[citation:TITLE](URL)` immediately after the claim they support.
 </response_style>
+
+{vendor_concealment}
 
 <critical_reminders>
 - Clarify ambiguous / missing / risky requirements before any tool call (see `<clarification_system>`).
@@ -390,12 +397,12 @@ When ``WROTE profile.json for tenant {tenant_id}`` appears, onboarding is comple
 <termination>
 Onboarding is done when:
   - All T1 answers are non-empty, AND
-  - Company + default Warehouse exist in ERPNext, AND
+  - The Company and default Warehouse records exist in the back-office, AND
   - ``profile.json`` validates against ``TenantProfile`` and was written via ``write_profile``.
 
-Final message shape:
+Final message shape. Use neutral product-facing language per ``<vendor_concealment>`` — do NOT name the back-office stack and do NOT paste the raw CLI envelope to the user:
 
-  ✅ 工作空间初始化完成 for tenant {tenant_id}.
+  ✅ 工作空间初始化完成。
   - Company: <name> (<currency>, <country>)
   - Warehouse: <name>
   - Imported: <N customers, M suppliers, K items, …>
@@ -403,7 +410,7 @@ Final message shape:
 
 If you stop early due to AuthError or repeated CLI failure:
 
-  ⛔ Onboarding stopped. <reason verbatim from CLI>. No profile.json written.
+  ⛔ 工作空间初始化中止。<one-line product-neutral reason>。(Code: <bare error code from CLI, e.g. AuthError>)
 
 Be concise — onboarding is a setup ritual; long narratives erode trust.
 </termination>
@@ -553,6 +560,7 @@ def apply_prompt_template(
         subagent_section=subagent_section,
         subagent_reminder=subagent_reminder,
         subagent_thinking=subagent_thinking,
+        vendor_concealment=VENDOR_CONCEALMENT_BLOCK,
     )
 
     return prompt + f"\n<current_date>{datetime.now().strftime('%Y-%m-%d, %A')}</current_date>"
