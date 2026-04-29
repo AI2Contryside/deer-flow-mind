@@ -21,6 +21,7 @@ def _build_metadata(
     thread_id: str | None,
     tenant_id: str | None,
     virtual_path: str,
+    uploaded: bool,
 ) -> dict | None:
     """Build the descriptive metadata payload for a presented artifact.
 
@@ -28,6 +29,10 @@ def _build_metadata(
     so the gateway can synthesize a signed-URL ApiAttachment for the FE.
     Returns None when the local file is missing — the artifact still appears
     in `ThreadState.artifacts` so the legacy 302 path keeps working.
+
+    `oss_key` is only populated when `uploaded=True` — i.e. the OSS push
+    actually succeeded. Otherwise we'd advertise a key for an object that
+    isn't there and the gateway would sign a URL that 404s.
     """
     if not thread_id:
         return None
@@ -46,7 +51,7 @@ def _build_metadata(
         "size": local_path.stat().st_size,
         "mime_type": mime_type or "application/octet-stream",
     }
-    if tenant_id:
+    if uploaded and tenant_id:
         metadata["oss_key"] = chat_artifact_key(tenant_id, thread_id, filename)
     return metadata
 
@@ -98,8 +103,13 @@ def _normalize_presented_filepath(
     return f"{OUTPUTS_VIRTUAL_PREFIX}/{relative_path.as_posix()}"
 
 
-def _push_to_oss(thread_id: str, tenant_id: str | None, virtual_path: str) -> None:
+def _push_to_oss(thread_id: str, tenant_id: str | None, virtual_path: str) -> bool:
     """Best-effort upload of an artifact to the chat bucket.
+
+    Returns True when the object was successfully written to OSS, False when
+    the upload was skipped (no tenant, OSS unconfigured, file missing) or
+    failed. Callers use the return value to gate downstream metadata so we
+    don't advertise an `oss_key` for an object that isn't actually there.
 
     Skipped silently when there's no tenant in scope, when OSS is not wired
     up, or when the local file is missing — the artifact still appears in
@@ -108,20 +118,20 @@ def _push_to_oss(thread_id: str, tenant_id: str | None, virtual_path: str) -> No
     without breaking the agent's response.
     """
     if not tenant_id:
-        return
+        return False
     try:
         storage = get_default()
     except Exception as exc:
         logger.debug("OSS unavailable during present_files: %s", exc)
-        return
+        return False
     try:
         local_path = get_paths().resolve_virtual_path(thread_id, virtual_path)
     except Exception as exc:
         logger.warning("Could not resolve %s for OSS push: %s", virtual_path, exc)
-        return
+        return False
     if not local_path.is_file():
         logger.warning("present_files: local file missing: %s", local_path)
-        return
+        return False
     filename = local_path.name
     key = chat_artifact_key(tenant_id, thread_id, filename)
     bucket = storage.config.chat_bucket
@@ -129,8 +139,10 @@ def _push_to_oss(thread_id: str, tenant_id: str | None, virtual_path: str) -> No
         with open(local_path, "rb") as fh:
             storage.put_object(bucket, key, fh.read(), content_type="", acl=ACL_PRIVATE)
         logger.info("Mirrored artifact %s -> oss://%s/%s", filename, bucket, key)
+        return True
     except Exception as exc:
         logger.warning("OSS push failed for %s: %s", filename, exc)
+        return False
 
 
 @tool("present_files", parse_docstring=True)
@@ -167,15 +179,21 @@ def present_file_tool(
 
     # Mirror each artifact to OSS so other replicas / the desktop client can
     # fetch it via signed URL without depending on this host's filesystem.
+    # Track per-path success so the metadata only advertises an oss_key when
+    # the object actually landed in the bucket.
     thread_id = runtime.context.get("thread_id") if runtime.context else None
     tenant_id = runtime.context.get("tenant_id") if runtime.context else None
+    upload_status: dict[str, bool] = {}
     if thread_id:
         for vp in normalized_paths:
-            _push_to_oss(thread_id, tenant_id, vp)
+            upload_status[vp] = _push_to_oss(thread_id, tenant_id, vp)
 
     metadata = [
         meta
-        for meta in (_build_metadata(thread_id, tenant_id, vp) for vp in normalized_paths)
+        for meta in (
+            _build_metadata(thread_id, tenant_id, vp, upload_status.get(vp, False))
+            for vp in normalized_paths
+        )
         if meta is not None
     ]
 
