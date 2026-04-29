@@ -102,3 +102,14 @@ def tenant_profile_usage_log_key(tenant_id: int | str, date: str, sha8: str) -> 
     retry-after-failure that uploads the same bytes lands on the same key.
     """
     return f"{tenant_prefix(tenant_id)}profile/usage_log/{date}-{sha8}.jsonl.gz"
+
+
+def tenant_profile_key(tenant_id: int | str) -> str:
+    """Object key for the live ``profile.json`` (`trademind-chat-session`).
+
+    A single canonical object per tenant — DeerFlow writes it as the
+    onboarding composer / runtime summarizer produces new versions, and
+    trademind-backend's gateway reads/PATCHes it on behalf of the FE
+    settings page. Object versioning at the bucket level keeps history.
+    """
+    return f"{tenant_prefix(tenant_id)}profile/profile.json"

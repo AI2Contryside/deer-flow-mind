@@ -15,8 +15,8 @@ from src.config.skills_config import SkillsConfig
 from src.config.subagents_config import load_subagents_config_from_dict
 from src.config.summarization_config import load_summarization_config_from_dict
 from src.config.title_config import load_title_config_from_dict
-from src.config.tool_output_config import load_tool_output_config_from_dict
 from src.config.tool_config import ToolConfig, ToolGroupConfig
+from src.config.tool_output_config import load_tool_output_config_from_dict
 
 load_dotenv()
 

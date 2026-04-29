@@ -17,7 +17,6 @@ tenant's memory into another's prompt:
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -28,7 +27,6 @@ from src.agents.memory.storage import (
     create_empty_memory,
     get_tenant_memory_key,
 )
-
 
 # ── 1. storage_path resolution ────────────────────────────────────────────
 

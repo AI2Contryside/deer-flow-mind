@@ -1,4 +1,5 @@
 import logging
+import mimetypes
 from pathlib import Path
 from typing import Annotated
 
@@ -14,6 +15,40 @@ from src.storage import ACL_PRIVATE, chat_artifact_key, get_default
 logger = logging.getLogger(__name__)
 
 OUTPUTS_VIRTUAL_PREFIX = f"{VIRTUAL_PATH_PREFIX}/outputs"
+
+
+def _build_metadata(
+    thread_id: str | None,
+    tenant_id: str | None,
+    virtual_path: str,
+) -> dict | None:
+    """Build the descriptive metadata payload for a presented artifact.
+
+    Returns a dict with `path`, `filename`, `oss_key`, `size`, `mime_type`
+    so the gateway can synthesize a signed-URL ApiAttachment for the FE.
+    Returns None when the local file is missing — the artifact still appears
+    in `ThreadState.artifacts` so the legacy 302 path keeps working.
+    """
+    if not thread_id:
+        return None
+    try:
+        local_path = get_paths().resolve_virtual_path(thread_id, virtual_path)
+    except Exception as exc:
+        logger.warning("Could not resolve %s for metadata: %s", virtual_path, exc)
+        return None
+    if not local_path.is_file():
+        return None
+    filename = local_path.name
+    mime_type, _ = mimetypes.guess_type(filename)
+    metadata: dict = {
+        "path": virtual_path,
+        "filename": filename,
+        "size": local_path.stat().st_size,
+        "mime_type": mime_type or "application/octet-stream",
+    }
+    if tenant_id:
+        metadata["oss_key"] = chat_artifact_key(tenant_id, thread_id, filename)
+    return metadata
 
 
 def _normalize_presented_filepath(
@@ -138,10 +173,18 @@ def present_file_tool(
         for vp in normalized_paths:
             _push_to_oss(thread_id, tenant_id, vp)
 
-    # The merge_artifacts reducer will handle merging and deduplication
-    return Command(
-        update={
-            "artifacts": normalized_paths,
-            "messages": [ToolMessage("Successfully presented files", tool_call_id=tool_call_id)],
-        },
-    )
+    metadata = [
+        meta
+        for meta in (_build_metadata(thread_id, tenant_id, vp) for vp in normalized_paths)
+        if meta is not None
+    ]
+
+    update: dict = {
+        "artifacts": normalized_paths,
+        "messages": [ToolMessage("Successfully presented files", tool_call_id=tool_call_id)],
+    }
+    if metadata:
+        update["artifact_metadata"] = metadata
+
+    # The merge_artifacts / merge_artifact_metadata reducers handle dedup
+    return Command(update=update)

@@ -72,10 +72,11 @@ def _cold_start_bootstrap(tenant_id: str, *, user_email: str | None) -> dict[str
         return None
 
     profile = {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": facts_dict.get("fetched_at"),
         "tenant_id": tenant_id,
         "summary": "",  # populated on first real summarize run
+        "scenarios": [],
         "facts": facts_dict,
         "operational_patterns": {},
         "key_entities": {},

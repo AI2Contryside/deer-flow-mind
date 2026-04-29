@@ -1,39 +1,100 @@
-"""System prompt for the ``tenant-onboarding`` subagent.
+"""System prompt scaffolding for tenant onboarding.
 
-Three phases, in order, with explicit stop conditions so the agent doesn't
-loop forever and doesn't half-finish:
-
-  1. Channel selection — Excel-driven, Q&A-driven, or hybrid.
-  2. ERPNext seeding — Company, Warehouse, then master data via the
-     ``erpnext-cli`` skill. Always idempotent (DocExists guard implied by
-     the skill's contract).
-  3. Profile composition — emit ``profile.json`` via the composer helper.
-
-The subagent inherits all parent tools (bash, read_file, write_file,
-str_replace, ask_clarification, present_files, plus skills). It deliberately
-does NOT have access to the ``task`` tool — onboarding is a single
-foreground flow and we don't want it spawning grandchildren.
+The lead agent now drives onboarding **inline** (no separate subagent)
+because ``ask_clarification`` only interrupts inside the lead agent's
+middleware chain. The legacy module is kept for the prompt template and
+question-rendering helpers; the lead agent imports ``format_question_plan``
+to render the dynamic plan from ``build_question_plan(answers)``.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 from src.agents.concealment import VENDOR_CONCEALMENT_BLOCK
-from src.agents.tenant_onboarding.question_bank import REQUIRED_QUESTIONS
+from src.agents.tenant_onboarding.question_bank import (
+    COMMON_QUESTIONS,
+    META_QUESTIONS,
+    OnboardingQuestion,
+    build_question_plan,
+    get_registry,
+)
 
 
+def _render_choices(question: OnboardingQuestion) -> str:
+    if not question.choices:
+        return ""
+    rendered = ", ".join(f"{c.value}={c.label_cn}" for c in question.choices)
+    return f" choices={{{rendered}}}"
+
+
+def _render_one(question: OnboardingQuestion) -> str:
+    tier_tag = "T1" if question.tier == 1 else "T2"
+    type_tag = question.qtype
+    multi = (
+        f" max_select={question.max_select}" if question.qtype == "multi" and question.max_select else ""
+    )
+    choices = _render_choices(question)
+    depends = " (only if depends_on)" if question.depends_on else ""
+    return (
+        f"  - [{tier_tag}/{type_tag}{multi}] {question.id} → {question.profile_path}{choices}{depends}\n"
+        f"      Q (cn): {question.question_cn}\n"
+        f"      Q (en): {question.question_en}"
+    )
+
+
+def format_question_plan(answers: dict[str, Any] | None = None) -> str:
+    """Render the next batch of questions, given answers so far.
+
+    When ``answers`` is None or empty, renders the full Meta+Common phase
+    (no scenario packs visible yet). After Q0/Q1 are answered the relevant
+    scenario pack questions appear automatically — the lead agent
+    re-invokes this between batches.
+    """
+    plan = build_question_plan(answers or {})
+    if not plan:
+        return "  (all required questions answered)"
+    return "\n".join(_render_one(q) for q in plan)
+
+
+def format_full_question_catalogue() -> str:
+    """Render the entire scenario catalogue (every pack, every question).
+
+    Used at the top of the lead-agent onboarding block as a reference table
+    so the model knows the full shape of the question space, not just the
+    next batch. The plan-builder still controls *what* gets asked; this is
+    documentation for the agent.
+    """
+    parts: list[str] = ["  # Meta (scenario routing)"]
+    parts.extend(_render_one(q) for q in META_QUESTIONS)
+    parts.append("\n  # Common (every tenant)")
+    parts.extend(_render_one(q) for q in COMMON_QUESTIONS)
+    for pack in get_registry().values():
+        parts.append(
+            f"\n  # Scenario: {pack.id} ({pack.parent_category}) — {pack.name_cn}"
+        )
+        parts.extend(_render_one(q) for q in pack.questions)
+    return "\n".join(parts)
+
+
+# Legacy alias — keeps any external import that was reaching for the
+# pre-v3 helper from breaking. New callers should use
+# ``format_question_plan`` (dynamic) or ``format_full_question_catalogue``.
 def _format_question_bank() -> str:
-    lines: list[str] = []
-    for q in REQUIRED_QUESTIONS:
-        tier_tag = "T1" if q.tier == 1 else "T2"
-        opts = f" options={list(q.options)}" if q.options else ""
-        depends = " (only if depends_on)" if q.depends_on else ""
-        lines.append(f"  - [{tier_tag}] {q.id} → {q.profile_path}{opts}{depends}\n      Q (cn): {q.question_cn}\n      Q (en): {q.question_en}")
-    return "\n".join(lines)
+    return format_full_question_catalogue()
 
 
-SYSTEM_PROMPT = """You are the **tenant-onboarding** subagent. You run exactly once per tenant, on
-their first chat session, to bring an empty ERPNext site to a usable state and
-emit a v1 ``profile.json``.
+SYSTEM_PROMPT = """You are the legacy **tenant-onboarding** subagent prompt.
+
+NOTE: The lead agent now drives onboarding inline (the previous subagent
+flow was retired because ``ask_clarification`` does not interrupt inside
+subagents). This prompt is retained only for backwards-compatible imports
+and as a reference; the active flow is in ``lead_agent/prompt.py``
+``_get_onboarding_section``. Treat the text below as documentation of the
+phases, not as runtime instructions.
+
+You run exactly once per tenant, on their first chat session, to bring an
+empty ERPNext site to a usable state and emit a v3 ``profile.json``.
 
 <scope>
 Your sole deliverable is:
@@ -215,7 +276,7 @@ Be concise. Onboarding is a setup ritual; long narratives erode trust.
 </termination>
 
 {VENDOR_CONCEALMENT_BLOCK}
-""".replace("{QUESTION_BANK}", _format_question_bank()).replace("{VENDOR_CONCEALMENT_BLOCK}", VENDOR_CONCEALMENT_BLOCK)
+""".replace("{QUESTION_BANK}", format_full_question_catalogue()).replace("{VENDOR_CONCEALMENT_BLOCK}", VENDOR_CONCEALMENT_BLOCK)
 
 
 def build_system_prompt() -> str:
@@ -227,4 +288,9 @@ def build_system_prompt() -> str:
     return SYSTEM_PROMPT
 
 
-__all__ = ["SYSTEM_PROMPT", "build_system_prompt"]
+__all__ = [
+    "SYSTEM_PROMPT",
+    "build_system_prompt",
+    "format_full_question_catalogue",
+    "format_question_plan",
+]

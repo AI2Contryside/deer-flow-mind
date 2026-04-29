@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -26,7 +25,6 @@ from erpnext_pkg.cli_groups.bootstrap_group import (  # noqa: E402
     _safe_count,
 )
 from erpnext_pkg.core.errors import AuthError, ServerError  # noqa: E402
-
 
 # ---------- _safe_count ----------------------------------------------------
 

@@ -15,6 +15,19 @@ from pydantic import BaseModel, Field
 
 EntityStatus = Literal["active", "recently_quiet"]
 
+# Top-level business categories the tenant can self-classify into during
+# onboarding (Q0). ``unknown`` is the fallback that routes the tenant to the
+# ``general`` scenario pack instead of a domain-specific question set.
+ScenarioCategory = Literal[
+    "trade",
+    "manufacturing",
+    "services",
+    "retail",
+    "project",
+    "assets",
+    "unknown",
+]
+
 
 class EntityRef(BaseModel):
     """A single key entity (Customer, Item, Warehouse, …) in the profile."""
@@ -27,12 +40,31 @@ class EntityRef(BaseModel):
     extras: dict[str, Any] = Field(default_factory=dict)
 
 
+class ScenarioRef(BaseModel):
+    """A primary-category + selected detailed scenarios bucket.
+
+    A tenant may select 1-2 detailed scenarios within each primary category
+    (avoid combinatorial explosion). The runtime summarizer uses this list
+    to decide which ``facts.<scenario_id>.*`` subtrees to inspect.
+    """
+
+    category: ScenarioCategory
+    scenarios: list[str] = Field(default_factory=list, max_length=5)
+
+
 class OperationalPatterns(BaseModel):
+    # Existing (v2)
     primary_workflow: str | None = Field(default=None, max_length=200)
     currencies_in_use: list[str] = Field(default_factory=list, max_length=10)
     valuation_method_observed: str | None = Field(default=None, max_length=40)
     default_warehouse_by_company: dict[str, str] = Field(default_factory=dict)
     payment_terms_in_use: list[str] = Field(default_factory=list, max_length=10)
+    # New (v3) — cross-scenario fields populated by onboarding
+    trade_mode: str | None = Field(default=None, max_length=40)
+    selling_currencies: list[str] = Field(default_factory=list, max_length=10)
+    buying_currencies: list[str] = Field(default_factory=list, max_length=10)
+    default_incoterm: str | None = Field(default=None, max_length=10)
+    monthly_volume_band: str | None = Field(default=None, max_length=16)
 
 
 class KeyEntities(BaseModel):
@@ -63,18 +95,36 @@ class OpenQuestion(BaseModel):
     candidates: list[str] = Field(default_factory=list, max_length=10)
 
 
+CURRENT_SCHEMA_VERSION = 3
+
+
 class TenantProfile(BaseModel):
     """Top-level shape persisted as profile.json."""
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     generated_at: str  # ISO timestamp
     tenant_id: str
     summary: str = Field(max_length=500)
+    scenarios: list[ScenarioRef] = Field(default_factory=list, max_length=6)
     facts: dict[str, Any] = Field(default_factory=dict)
     operational_patterns: OperationalPatterns = Field(default_factory=OperationalPatterns)
     key_entities: KeyEntities = Field(default_factory=KeyEntities)
     taxonomy: Taxonomy = Field(default_factory=Taxonomy)
     open_questions: list[OpenQuestion] = Field(default_factory=list, max_length=10)
+
+
+def upgrade_profile_dict(data: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade a persisted profile dict to the current schema in-place.
+
+    Returns the same dict (mutated) for chaining. Callers can decide whether
+    to persist the upgrade. Unknown ``schema_version`` values are coerced to
+    the current version and a default ``scenarios=[]`` is added.
+    """
+    version = data.get("schema_version")
+    if version != CURRENT_SCHEMA_VERSION:
+        data["schema_version"] = CURRENT_SCHEMA_VERSION
+    data.setdefault("scenarios", [])
+    return data
 
 
 def collect_entity_names(profile: TenantProfile) -> set[tuple[str, str]]:

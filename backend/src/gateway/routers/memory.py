@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header
 from pydantic import BaseModel, Field
 
 from src.agents.memory.storage import create_empty_memory

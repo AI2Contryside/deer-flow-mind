@@ -307,13 +307,23 @@ def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool, te
         print(f"Failed to check tenant profile presence: {exc}")
         return ""
 
-    # Inline the question bank so the lead agent has the full schema
-    # in front of it. Helper lives in ``tenant_onboarding.prompt`` so the
-    # source of truth stays with the schema.
+    # Inline the dynamic question plan + the full catalogue so the lead
+    # agent knows both the next batch to ask AND the complete shape of the
+    # scenario space. Source of truth lives in
+    # ``tenant_onboarding.question_bank`` (plugin packs auto-discovered).
     try:
-        from src.agents.tenant_onboarding.prompt import _format_question_bank
+        from src.agents.tenant_onboarding.prompt import (
+            format_full_question_catalogue,
+            format_question_plan,
+        )
 
-        question_bank_block = _format_question_bank()
+        next_batch_block = format_question_plan({})  # no answers yet at first turn
+        question_bank_block = (
+            "Next batch to ask now (Meta + Common — re-invoke the plan after each answer):\n"
+            f"{next_batch_block}\n\n"
+            "Full scenario catalogue (only ask the questions for scenarios the user picks in Q1):\n"
+            f"{format_full_question_catalogue()}"
+        )
     except Exception as exc:
         print(f"Failed to load onboarding question bank: {exc}")
         question_bank_block = "(question bank failed to load — ask the user generically)"
@@ -339,12 +349,16 @@ List ``/mnt/user-data/uploads`` first via ``bash``.
     * For very large spreadsheets (>50k rows or >20MB), do NOT load the docling JSON into context — write Python (``duckdb.sql("SELECT … FROM read_xlsx(path, sheet=, range=)")``, ``pandas.read_excel(path, engine='calamine')``, or ``openpyxl.load_workbook(path, read_only=True).iter_rows(...)``).
     * Identify the doctype (Customer / Supplier / Item / Item Price / Warehouse / Account). If ambiguous, call ``ask_clarification`` with the file name and a candidate list — don't guess.
     * Cap at 200 rows per file in v1 seed; tell the user if you truncate.
-  - **No uploads** → pure Q&A path; walk the question bank below.
+  - **No uploads** → pure Q&A path; walk the dynamic question plan below.
 
-Question bank (T1 = mandatory, T2 = conditional, only when depends_on holds):
+Question plan is **three phases**, in order:
+  1. **Meta** (`primary_categories`, then `detailed_scenarios`) — routes which scenario packs apply.
+  2. **Common** (5 questions) — every tenant answers all.
+  3. **Scenario packs** — only the packs the user picked in Q1. Cross-pack duplicates (same `profile_path`) are deduped; ask each unique question once.
+
 {question_bank_block}
 
-Ask T1 questions in **batches of 3-5** via ``ask_clarification`` (``clarification_type="missing_info"``). Never ask one at a time (slow), never all at once (overwhelming). Skip questions whose answer is already implied by an upload. Re-asking already-answered questions is the #1 onboarding-survey complaint — avoid it.
+Ask T1 questions in **batches of 3-5** via ``ask_clarification`` (``clarification_type="missing_info"``). Never ask one at a time (slow), never all at once (overwhelming). After each answer batch, re-derive the next questions by calling ``build_question_plan(answers)`` from ``src.agents.tenant_onboarding.question_bank`` — do NOT hand-pick from a static list. Skip questions whose answer is already implied by an upload. Re-asking already-answered questions is the #1 onboarding-survey complaint — avoid it.
 </phase_1_channel_selection>
 
 <phase_2_erpnext_seeding>
@@ -354,9 +368,10 @@ Order matters because ERPNext has hard prerequisites:
 
   1. ``bootstrap status`` — verify creds + see what masters exist. If this returns ``AuthError`` STOP and surface verbatim; do not retry, do not call ``session login``.
   2. ``Company`` — name from tenant company name above, currency from ``answers.company_currency``, country from ``answers.company_country``. Idempotent.
-  3. **Default Warehouse** — leaf from ``answers.default_warehouse_leaf`` (defaults to "Stores"). Created under the Company's auto-generated "All Warehouses - <ABBR>".
-  4. **Default Price List** — name from ``answers.default_price_list`` (defaults to "Standard Selling"). Skip if exists.
-  5. **Master data from uploads**, in this exact order (each layer depends on the previous):
+  3. **Default Warehouse** — "Stores" leaf under the auto-created "All Warehouses - <ABBR>". Some scenario packs (e.g. ``import_export``, ``physical_store``) extend this with their own structure — see the per-scenario blueprint below.
+  4. **Default Price List** — "Standard Selling". Brokerage seeds one per selling/buying currency (per the scenario blueprint). Skip names that already exist.
+  5. **Per-scenario blueprints** — call ``collect_erpnext_init_blueprints(answers)`` (from ``src.agents.tenant_onboarding.composer``) for the declarative shape of each picked scenario; feed each to ``erpnext-cli``. Idempotent.
+  6. **Master data from uploads**, in this exact order (each layer depends on the previous):
      a. Suppliers (no upstream prereqs)
      b. Customers (no upstream prereqs)
      c. Items (uses default Item Group "All Item Groups" if none specified)

@@ -18,11 +18,12 @@ from src.agents.tenant_profile.summarizer.schema import (
     KeyEntities,
     OpenQuestion,
     OperationalPatterns,
+    ScenarioRef,
     Taxonomy,
     TenantProfile,
 )
 
-ONBOARDING_SOURCE = "onboarding-v1"
+ONBOARDING_SOURCE = "onboarding-v3"
 
 
 def _now_iso() -> str:
@@ -60,6 +61,7 @@ __all__ = [
     "ONBOARDING_SOURCE",
     "OpenQuestion",
     "OperationalPatterns",
+    "ScenarioRef",
     "Taxonomy",
     "TenantProfile",
     "minimal_profile_dict",

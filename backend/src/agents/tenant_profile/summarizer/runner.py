@@ -300,8 +300,11 @@ def _parse_and_validate(raw: str, inputs: SummarizeInput) -> TenantProfile:
     # making these up.
     data["tenant_id"] = inputs.tenant_id
     data.setdefault("generated_at", inputs.now_iso)
-    data.setdefault("schema_version", 2)
     data.setdefault("facts", inputs.facts)
+    # Upgrade legacy v1/v2 dicts to v3 (adds scenarios=[]).
+    from src.agents.tenant_profile.summarizer.schema import upgrade_profile_dict
+
+    upgrade_profile_dict(data)
 
     try:
         profile = TenantProfile.model_validate(data)

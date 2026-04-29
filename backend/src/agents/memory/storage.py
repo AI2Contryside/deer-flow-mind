@@ -1,7 +1,6 @@
 """Memory storage abstraction layer with support for multiple backends."""
 
 import json
-import os
 import re
 import threading
 from abc import ABC, abstractmethod

@@ -28,6 +28,31 @@ def merge_artifacts(existing: list[str] | None, new: list[str] | None) -> list[s
     return list(dict.fromkeys(existing + new))
 
 
+def merge_artifact_metadata(
+    existing: list[dict] | None, new: list[dict] | None
+) -> list[dict]:
+    """Reducer for artifact metadata - merges by `path`, last write wins.
+
+    Each entry carries the descriptive fields the gateway needs to surface a
+    signed-URL preview to the FE: `path`, `filename`, `oss_key`, `size`,
+    `mime_type`. Older entries with the same path are replaced so the freshest
+    metadata (e.g. updated size after a re-render) wins.
+    """
+    if existing is None:
+        return list(new or [])
+    if new is None:
+        return list(existing)
+    by_path: dict[str, dict] = {}
+    for entry in existing + new:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        if not isinstance(path, str):
+            continue
+        by_path[path] = entry
+    return list(by_path.values())
+
+
 def merge_viewed_images(existing: dict[str, ViewedImageData] | None, new: dict[str, ViewedImageData] | None) -> dict[str, ViewedImageData]:
     """Reducer for viewed_images dict - merges image dictionaries.
 
@@ -50,6 +75,7 @@ class ThreadState(AgentState):
     thread_data: NotRequired[ThreadDataState | None]
     title: NotRequired[str | None]
     artifacts: Annotated[list[str], merge_artifacts]
+    artifact_metadata: Annotated[list[dict], merge_artifact_metadata]
     todos: NotRequired[list | None]
     uploaded_files: NotRequired[list[dict] | None]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]  # image_path -> {base64, mime_type}

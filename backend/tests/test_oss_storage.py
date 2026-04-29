@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -37,7 +37,7 @@ def test_sanitize_filename_caps_length() -> None:
 
 
 def test_chat_upload_key_shape() -> None:
-    day = datetime(2026, 4, 26, 12, 0, 0, tzinfo=timezone.utc)
+    day = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     key = chat_upload_key(7, 42, day, "../../etc/passwd")
     assert key.startswith("tenants/7/users/42/2026-04-26/")
     assert key.endswith("-passwd")

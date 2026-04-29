@@ -7,8 +7,8 @@ from langchain_core.runnables import RunnableConfig
 from src.agents.lead_agent.prompt import apply_prompt_template
 from src.agents.middlewares.clarification_middleware import ClarificationMiddleware
 from src.agents.middlewares.memory_middleware import MemoryMiddleware
-from src.agents.middlewares.safe_summarization_middleware import SafeSummarizationMiddleware
 from src.agents.middlewares.repeated_tool_failure_middleware import RepeatedToolFailureMiddleware
+from src.agents.middlewares.safe_summarization_middleware import SafeSummarizationMiddleware
 from src.agents.middlewares.subagent_limit_middleware import SubagentLimitMiddleware
 from src.agents.middlewares.title_middleware import TitleMiddleware
 from src.agents.middlewares.todo_middleware import TodoMiddleware
