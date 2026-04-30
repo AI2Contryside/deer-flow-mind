@@ -391,3 +391,21 @@ checkpointer:
 #           context:
 #             thinking_enabled: true
 #             subagent_enabled: true
+
+# ──────────────────────────────────────────────────────────────────────────
+# Aliyun OSS object storage. AK/SK MUST come from env (see .env):
+#   ALIYUN_OSS_ACCESS_KEY_ID
+#   ALIYUN_OSS_ACCESS_KEY_SECRET
+# Mirrors trademind-backend's gateway config so AI artifacts and uploads
+# land in the same buckets the desktop client downloads from. Without this
+# block, present_files silently skips the OSS push and the canvas preview
+# never receives a usable artifact URL.
+# ──────────────────────────────────────────────────────────────────────────
+oss:
+  endpoint: "oss-cn-hangzhou.aliyuncs.com"
+  region: "cn-hangzhou"
+  sys_bucket: "trademind-sys"
+  chat_bucket: "trademind-chat-session"
+  signed_url_ttl_seconds: 3600
+  max_upload_bytes: 20971520    # 20 MiB
+  avatar_max_bytes: 5242880     # 5 MiB
