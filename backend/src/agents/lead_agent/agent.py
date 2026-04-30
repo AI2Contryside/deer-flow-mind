@@ -312,6 +312,25 @@ def make_lead_agent(config: RunnableConfig):
     raw_tenant_id = cfg.get("tenant_id")
     tenant_id: str | None = str(raw_tenant_id) if raw_tenant_id not in (None, "", 0) else None
 
+    # Mirror the per-request identity bundle into logctx ContextVars so
+    # every middleware / tool / skill log line, plus outbound HTTP calls,
+    # carry tenant_id / user_id / log_id / session_id. LangGraph's
+    # FastAPI-side IdentityMiddleware doesn't run for in-process runs,
+    # so make_lead_agent (called once per request) is the canonical
+    # binding point on the LangGraph side.
+    from src.logctx import bind_fields, ensure_log_id  # local import: avoids cycles
+    from src.logctx.context import Fields as _LogCtxFields
+
+    bind_fields(
+        _LogCtxFields(
+            tenant_id=tenant_id or "",
+            user_id=str(cfg.get("user_id") or ""),
+            log_id=str(cfg.get("log_id") or ""),
+            session_id=str(cfg.get("thread_id") or cfg.get("session_id") or ""),
+        )
+    )
+    ensure_log_id()
+
     # tenant_name is the user-supplied organization name from the create-tenant
     # form on the Go side. The lead agent forwards it to the tenant-onboarding
     # subagent as the ERPNext Company name so the subagent doesn't re-ask the

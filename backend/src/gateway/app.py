@@ -18,13 +18,12 @@ from src.gateway.routers import (
     suggestions,
     uploads,
 )
+from src.logctx import IdentityMiddleware, install_log_filter
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# Install logging filter first so the per-request format string can
+# resolve %(log_id)s / %(tenant_id)s on every record from the very
+# first import-time message.
+install_log_filter(level=logging.INFO)
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +151,11 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     )
 
     # CORS is handled by nginx - no need for FastAPI middleware
+
+    # Lift X-Tenant-Id / X-User-Id / X-Log-Id / X-Session-Id headers
+    # into logctx contextvars so every log line + outbound HTTP call
+    # carries them automatically.
+    app.add_middleware(IdentityMiddleware)
 
     # Include routers
     # Models API is mounted at /api/models
