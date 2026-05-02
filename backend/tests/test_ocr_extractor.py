@@ -26,7 +26,7 @@ def test_ocr_extractor_registered() -> None:
     assert cfg is OCR_EXTRACTOR_CONFIG
 
     assert cfg.name == "ocr-extractor"
-    assert cfg.model == "glm-4v-plus"
+    assert cfg.model == "qwen-vl-ocr-latest"
     assert cfg.max_turns == 12
     assert cfg.timeout_seconds == 420
 
@@ -53,7 +53,7 @@ def test_get_subagent_config_resolves_ocr_extractor() -> None:
     cfg = get_subagent_config("ocr-extractor")
     assert cfg is not None
     assert cfg.name == "ocr-extractor"
-    assert cfg.model == "glm-4v-plus"
+    assert cfg.model == "qwen-vl-ocr-latest"
 
 
 def test_ocr_prompt_mentions_every_doc_type() -> None:

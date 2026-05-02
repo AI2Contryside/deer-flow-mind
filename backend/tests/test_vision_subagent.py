@@ -28,11 +28,12 @@ import pytest
 
 @pytest.fixture
 def loaded_app_config(monkeypatch):
-    """Inject a placeholder ZHIPU_API_KEY so config.yaml resolves cleanly,
-    then reset the singleton so the next call to ``get_app_config()`` rereads
-    the file. Production keeps a real key in the deploy env.
+    """Inject a placeholder DASHSCOPE_API_KEY so config.yaml resolves
+    cleanly, then reset the singleton so the next call to
+    ``get_app_config()`` rereads the file. Production keeps a real key
+    in the deploy env (dev box ``.env``).
     """
-    monkeypatch.setenv("ZHIPU_API_KEY", "test-zhipu-key-not-real")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key-not-real")
     from src.config.app_config import reset_app_config
 
     reset_app_config()
@@ -49,7 +50,7 @@ def test_vision_analyst_registered() -> None:
     assert cfg is VISION_ANALYST_CONFIG
 
     assert cfg.name == "vision-analyst"
-    assert cfg.model == "glm-4v-plus"
+    assert cfg.model == "qwen-vl-plus-latest"
     assert cfg.max_turns == 8
     assert cfg.timeout_seconds == 300
 
@@ -89,7 +90,7 @@ def test_get_subagent_config_returns_vision_analyst() -> None:
     cfg = get_subagent_config("vision-analyst")
     assert cfg is not None
     assert cfg.name == "vision-analyst"
-    assert cfg.model == "glm-4v-plus"
+    assert cfg.model == "qwen-vl-plus-latest"
 
 
 def test_task_tool_literal_accepts_vision_subagents() -> None:
@@ -131,17 +132,26 @@ def test_build_subagent_runtime_middlewares_appends_view_image() -> None:
     )
 
 
-def test_glm4v_plus_model_config_loadable(loaded_app_config) -> None:
-    """config.yaml exposes glm-4v-plus with supports_vision=True."""
+def test_qwen_vl_models_loadable(loaded_app_config) -> None:
+    """config.yaml exposes both Qwen-VL variants with supports_vision=True.
+
+    Two distinct models on purpose: qwen-vl-ocr-latest tuned for dense
+    document OCR (used by ocr-extractor), qwen-vl-plus-latest for
+    general image Q&A (used by vision-analyst). Both must report
+    ``supports_vision=True`` so the executor wires up
+    ViewImageMiddleware + view_image_tool, and neither must claim
+    ``supports_thinking`` (Qwen-VL series has no thinking mode in the
+    DashScope OpenAI-compat protocol — flagging it would enable a
+    thinking parameter the gateway would 400 on).
+    """
     from src.config import get_app_config
 
-    cfg = get_app_config().get_model_config("glm-4v-plus")
-    assert cfg is not None, "glm-4v-plus missing from config.yaml models[]"
-    assert cfg.supports_vision is True
-    # Must NOT claim thinking support — GLM-4V doesn't have a thinking
-    # mode in OpenAI-compat protocol; flagging it would let the runtime
-    # try to enable thinking and 400 the request.
-    assert cfg.supports_thinking is False or cfg.supports_thinking is None
+    app_cfg = get_app_config()
+    for name in ("qwen-vl-ocr-latest", "qwen-vl-plus-latest"):
+        cfg = app_cfg.get_model_config(name)
+        assert cfg is not None, f"{name} missing from config.yaml models[]"
+        assert cfg.supports_vision is True
+        assert cfg.supports_thinking is False or cfg.supports_thinking is None
 
 
 def test_deepseek_v4_pro_unchanged(loaded_app_config) -> None:

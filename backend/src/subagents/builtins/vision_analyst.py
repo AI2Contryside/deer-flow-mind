@@ -2,7 +2,7 @@
 
 Delegated by the lead agent whenever an image attachment is present and the
 question is *about the image* (rather than a structured trade document).
-Runs on a vision-capable model (default: glm-4v-plus) so the executor's
+Runs on a vision-capable model (default: qwen-vl-plus-latest) so the executor's
 runtime middleware chain picks up `ViewImageMiddleware` and the tool list
 includes `view_image_tool`. The lead agent itself stays on a
 text-only thinking model and never sees the image bytes.
@@ -58,7 +58,7 @@ VISION_ANALYST_CONFIG = SubagentConfig(
     system_prompt=VISION_ANALYST_SYSTEM_PROMPT,
     tools=["view_image", "ls", "read_file"],
     disallowed_tools=["task", "ask_clarification"],
-    model="glm-4v-plus",
+    model="qwen-vl-plus-latest",
     max_turns=8,
     timeout_seconds=300,
 )

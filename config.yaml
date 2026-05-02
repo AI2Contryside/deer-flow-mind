@@ -37,17 +37,34 @@ models:
     api_base: https://api.deepseek.com
     supports_thinking: true
 
-  # Vision model for image understanding via subagents (vision-analyst,
-  # ocr-extractor). Lead agent stays on deepseek-v4-pro so thinking is
-  # preserved; vision is invoked only when lead delegates a vision/OCR task.
-  # Zhipu BigModel exposes an OpenAI-compatible endpoint, so ChatOpenAI
-  # works directly — no extra SDK install needed.
-  - name: glm-4v-plus
-    display_name: 智谱 GLM-4V Plus (vision)
+  # Vision models for image understanding via subagents. Lead agent
+  # stays on deepseek-v4-pro so thinking is preserved; vision is invoked
+  # only when lead delegates to a vision-capable subagent. Both Qwen-VL
+  # variants live on Aliyun DashScope's OpenAI-compatible endpoint so
+  # ChatOpenAI works directly — no extra SDK install needed.
+  #
+  # Two distinct models on purpose:
+  #   * qwen-vl-ocr-latest is tuned for character-fidelity OCR of dense
+  #     trade documents (invoices, packing lists, B/L) — used by
+  #     `ocr-extractor`.
+  #   * qwen-vl-plus-latest is the general vision-QA model for product
+  #     photos / factory shots / screenshots — used by `vision-analyst`.
+  - name: qwen-vl-ocr-latest
+    display_name: 通义千问 VL-OCR (latest)
     use: langchain_openai:ChatOpenAI
-    model: glm-4v-plus
-    api_key: $ZHIPU_API_KEY
-    base_url: https://open.bigmodel.cn/api/paas/v4/
+    model: qwen-vl-ocr-latest
+    api_key: $DASHSCOPE_API_KEY
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    max_tokens: 4096
+    temperature: 0
+    supports_vision: true
+
+  - name: qwen-vl-plus-latest
+    display_name: 通义千问 VL-Plus (latest)
+    use: langchain_openai:ChatOpenAI
+    model: qwen-vl-plus-latest
+    api_key: $DASHSCOPE_API_KEY
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     max_tokens: 4096
     temperature: 0
     supports_vision: true
