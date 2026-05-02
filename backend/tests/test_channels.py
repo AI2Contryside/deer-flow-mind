@@ -326,6 +326,57 @@ class TestExtractResponseText:
         }
         assert _extract_response_text(result) == "actual response"
 
+    def test_clarification_interrupt_payload_dict(self):
+        # While the run is paused, the ToolMessage hasn't been committed yet
+        # — the question lives only in the ``__interrupt__`` payload that
+        # ``runs.wait`` returns alongside the partial state. Channels must
+        # surface it so IM users see what's being asked while we wait.
+        from src.channels.manager import _extract_response_text
+
+        result = {
+            "messages": [
+                {"type": "human", "content": "hi"},
+                {
+                    "type": "ai",
+                    "content": "",
+                    "tool_calls": [{"name": "ask_clarification", "args": {"question": "您想了解哪方面?"}}],
+                },
+            ],
+            "__interrupt__": [
+                {
+                    "value": {
+                        "type": "ask_clarification",
+                        "formatted_question": "❓ 您想了解哪方面?",
+                    }
+                }
+            ],
+        }
+        assert _extract_response_text(result) == "❓ 您想了解哪方面?"
+
+    def test_clarification_interrupt_payload_object(self):
+        # The langgraph_sdk client returns Interrupt objects, not dicts.
+        # Match by attribute access too — duck-typed because the test suite
+        # avoids importing langgraph_sdk just for the dataclass shape.
+        from types import SimpleNamespace
+
+        from src.channels.manager import _extract_response_text
+
+        interrupt_obj = SimpleNamespace(value={"type": "ask_clarification", "formatted_question": "❓ pick one"})
+        result = {"messages": [], "__interrupt__": (interrupt_obj,)}
+        assert _extract_response_text(result) == "❓ pick one"
+
+    def test_unrelated_interrupt_payload_falls_back_to_messages(self):
+        # Future use cases may interrupt for reasons other than
+        # ask_clarification. Don't hijack that path: fall through to the
+        # message walk so the existing AI / tool-message logic still wins.
+        from src.channels.manager import _extract_response_text
+
+        result = {
+            "messages": [{"type": "ai", "content": "still answering"}],
+            "__interrupt__": [{"value": {"type": "human_review", "summary": "hold"}}],
+        }
+        assert _extract_response_text(result) == "still answering"
+
     def test_clarification_tool_message(self):
         from src.channels.manager import _extract_response_text
 

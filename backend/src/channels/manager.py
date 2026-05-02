@@ -45,9 +45,20 @@ def _extract_response_text(result: dict | list) -> str:
 
     Handles special cases:
     - Regular AI text responses
-    - Clarification interrupts (``ask_clarification`` tool messages)
+    - Clarification interrupts (``ask_clarification`` tool messages on
+      resumed runs, or ``__interrupt__`` payloads while the run is paused)
     - AI messages with tool_calls but no text content
     """
+    # Interrupted runs surface their pending question via ``__interrupt__`` —
+    # the ToolMessage with the formatted question is only committed on
+    # resume, so we cannot rely on the message walk below to pick it up
+    # while the thread is paused. Surface the interrupt payload's
+    # ``formatted_question`` so IM channel users see what's being asked.
+    if isinstance(result, dict):
+        interrupt_text = _extract_interrupt_question(result.get("__interrupt__"))
+        if interrupt_text:
+            return interrupt_text
+
     if isinstance(result, list):
         messages = result
     elif isinstance(result, dict):
@@ -89,6 +100,35 @@ def _extract_response_text(result: dict | list) -> str:
                 text = "".join(parts)
                 if text:
                     return text
+    return ""
+
+
+def _extract_interrupt_question(interrupts: object) -> str:
+    """Pull the formatted question out of an ``__interrupt__`` payload.
+
+    LangGraph surfaces interrupts as a tuple/list of ``Interrupt`` objects
+    (or their dict-serialised equivalents). The
+    ``ClarificationMiddleware`` payload is shaped as
+    ``{"type": "ask_clarification", "formatted_question": "..."}``; everything
+    else is ignored so unrelated interrupts (future use cases) don't leak
+    through this code path.
+    """
+    if not interrupts:
+        return ""
+    iterable = interrupts if isinstance(interrupts, (list, tuple)) else [interrupts]
+    for entry in iterable:
+        value: object
+        if isinstance(entry, Mapping):
+            value = entry.get("value")
+        else:
+            value = getattr(entry, "value", None)
+        if not isinstance(value, Mapping):
+            continue
+        if value.get("type") != "ask_clarification":
+            continue
+        formatted = value.get("formatted_question")
+        if isinstance(formatted, str) and formatted:
+            return formatted
     return ""
 
 
@@ -172,14 +212,16 @@ def _resolve_attachments(thread_id: str, artifacts: list[str]) -> list[ResolvedA
                 continue
             mime, _ = mimetypes.guess_type(str(actual))
             mime = mime or "application/octet-stream"
-            attachments.append(ResolvedAttachment(
-                virtual_path=virtual_path,
-                actual_path=actual,
-                filename=actual.name,
-                mime_type=mime,
-                size=actual.stat().st_size,
-                is_image=mime.startswith("image/"),
-            ))
+            attachments.append(
+                ResolvedAttachment(
+                    virtual_path=virtual_path,
+                    actual_path=actual,
+                    filename=actual.name,
+                    mime_type=mime,
+                    size=actual.stat().st_size,
+                    is_image=mime.startswith("image/"),
+                )
+            )
         except (ValueError, OSError) as exc:
             logger.warning("[Manager] failed to resolve artifact %s: %s", virtual_path, exc)
     return attachments
@@ -227,12 +269,7 @@ class ChannelManager:
     def _resolve_run_params(self, msg: InboundMessage, thread_id: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
         channel_layer, user_layer = self._resolve_session_layer(msg)
 
-        assistant_id = (
-            user_layer.get("assistant_id")
-            or channel_layer.get("assistant_id")
-            or self._default_session.get("assistant_id")
-            or self._assistant_id
-        )
+        assistant_id = user_layer.get("assistant_id") or channel_layer.get("assistant_id") or self._default_session.get("assistant_id") or self._assistant_id
         if not isinstance(assistant_id, str) or not assistant_id.strip():
             assistant_id = self._assistant_id
 

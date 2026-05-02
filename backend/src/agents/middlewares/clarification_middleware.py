@@ -5,10 +5,9 @@ from typing import override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import ToolMessage
-from langgraph.graph import END
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 
 
 class ClarificationMiddlewareState(AgentState):
@@ -18,30 +17,35 @@ class ClarificationMiddlewareState(AgentState):
 
 
 class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
-    """Intercepts clarification tool calls and interrupts execution to present questions to the user.
+    """Intercepts clarification tool calls and pauses execution via LangGraph
+    ``interrupt()`` so the gateway can route the user's reply back into the same
+    thread via ``Command(resume=...)``.
 
-    When the model calls the `ask_clarification` tool, this middleware:
-    1. Intercepts the tool call before execution
-    2. Extracts the clarification question and metadata
-    3. Formats a user-friendly message
-    4. Returns a Command that interrupts execution and presents the question
-    5. Waits for user response before continuing
+    Why interrupt() instead of Command(goto=END)
+    --------------------------------------------
+    The earlier design ended the run cleanly (status="success") with the
+    formatted question persisted as a ToolMessage. From the persistence layer
+    that looked indistinguishable from an ordinary completed turn, so any FE
+    bookkeeping miss (page reload, lost local-id binding, accidental "new
+    chat" click) would route the user's answer to a fresh thread and the
+    original conversation appeared to vanish. See thread
+    ``36ea98b4-1e6b-4fcc-8fca-0cd921699d65`` for the failure mode.
 
-    This replaces the tool-based approach where clarification continued the conversation flow.
+    With ``interrupt()`` the thread state itself signals "awaiting user
+    response" (``status="interrupted"``, payload exposed via
+    ``thread.interrupts``). The gateway can detect this and force the next
+    user message to resume the interrupted thread instead of creating a new
+    one — making the routing robust against FE state drift.
+
+    On resume, the user's answer flows back through ``interrupt()``'s return
+    value. The middleware then commits both the formatted question (as the
+    ToolMessage closing the original tool_call) and a HumanMessage carrying
+    the answer, so the persisted history remains
+    ``AI[tool_call] -> Tool[question] -> Human[answer] -> AI[...]`` — the
+    same shape FE renderers and IM channels already understand.
     """
 
     state_schema = ClarificationMiddlewareState
-
-    def _is_chinese(self, text: str) -> bool:
-        """Check if text contains Chinese characters.
-
-        Args:
-            text: Text to check
-
-        Returns:
-            True if text contains Chinese characters
-        """
-        return any("\u4e00" <= char <= "\u9fff" for char in text)
 
     def _format_clarification_message(self, args: dict) -> str:
         """Format the clarification arguments into a user-friendly message.
@@ -127,45 +131,70 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
 
         return "\n".join(message_parts)
 
-    def _handle_clarification(self, request: ToolCallRequest) -> Command:
-        """Handle clarification request and return command to interrupt execution.
+    def _build_resume_messages(
+        self,
+        formatted_question: str,
+        tool_call_id: str,
+        answer: object,
+    ) -> list:
+        """Build the messages to commit on resume.
 
-        Args:
-            request: Tool call request
-
-        Returns:
-            Command that interrupts execution with the formatted clarification message
+        Returns the ToolMessage that closes the original ``ask_clarification``
+        tool_call, plus a HumanMessage carrying the user's answer when one
+        was provided. Empty / null answers (``Command(resume=None)`` or the
+        user submitting an empty string) only commit the ToolMessage so the
+        protocol invariant — every tool_call.id has a matching ToolMessage —
+        still holds and the model can decide how to proceed.
         """
-        # Extract clarification arguments
-        args = request.tool_call.get("args", {})
-        question = args.get("question", "")
-
-        print("[ClarificationMiddleware] Intercepted clarification request")
-        print(f"[ClarificationMiddleware] Question: {question}")
-
-        # Format the clarification message
-        formatted_message = self._format_clarification_message(args)
-
-        # Get the tool call ID
-        tool_call_id = request.tool_call.get("id", "")
-
-        # Create a ToolMessage with the formatted question
-        # This will be added to the message history
         tool_message = ToolMessage(
-            content=formatted_message,
+            content=formatted_question,
             tool_call_id=tool_call_id,
             name="ask_clarification",
         )
+        messages: list = [tool_message]
+        if answer is None:
+            return messages
+        answer_text = str(answer).strip() if not isinstance(answer, str) else answer.strip()
+        if answer_text:
+            messages.append(HumanMessage(content=answer_text))
+        return messages
 
-        # Return a Command that:
-        # 1. Adds the formatted tool message
-        # 2. Interrupts execution by going to __end__
-        # Note: We don't add an extra AIMessage here - the frontend will detect
-        # and display ask_clarification tool messages directly
-        return Command(
-            update={"messages": [tool_message]},
-            goto=END,
+    def _handle_clarification(self, request: ToolCallRequest) -> Command:
+        """Pause execution via interrupt() and, on resume, commit the answer.
+
+        First call (model just emitted ``ask_clarification``):
+            ``interrupt(payload)`` raises ``GraphInterrupt`` — LangGraph
+            checkpoints the thread, marks it ``status="interrupted"``, and
+            surfaces ``payload`` via ``thread.interrupts``. The function does
+            not return.
+
+        Second call (gateway forwarded ``Command(resume=user_text)``):
+            LangGraph re-executes this whole wrapper. ``interrupt`` now
+            returns the resume value rather than raising. We assemble the
+            ToolMessage + HumanMessage and return them in a Command(update).
+            The agent loop continues normally from there.
+        """
+        args = request.tool_call.get("args", {}) or {}
+        tool_call_id = request.tool_call.get("id", "")
+        formatted_message = self._format_clarification_message(args)
+
+        # First-call path raises; second-call path returns the resume value.
+        # The payload is what the gateway / FE see in `thread.interrupts`.
+        # Keep it self-describing so downstream consumers (Go gateway, IM
+        # channels, future tooling) can pattern-match on `type` without
+        # parsing free-form text.
+        answer = interrupt(
+            {
+                "type": "ask_clarification",
+                "tool_call_id": tool_call_id,
+                "args": args,
+                "formatted_question": formatted_message,
+            }
         )
+
+        # Reached only on resume. Persist the canonical shape.
+        messages = self._build_resume_messages(formatted_message, tool_call_id, answer)
+        return Command(update={"messages": messages})
 
     @override
     def wrap_tool_call(
