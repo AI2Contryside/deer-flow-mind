@@ -63,7 +63,7 @@ OCR_EXTRACTOR_CONFIG = SubagentConfig(
     system_prompt=OCR_EXTRACTOR_SYSTEM_PROMPT,
     tools=["view_image", "ls", "read_file", "write_file", "present_files"],
     disallowed_tools=["task", "ask_clarification", "bash"],
-    model="qwen-vl-ocr-latest",
+    model="qwen-vl-max-latest",
     max_turns=12,
     timeout_seconds=420,
 )

@@ -505,7 +505,7 @@ See [docs/summarization.md](docs/summarization.md) for details.
 DeerFlow exposes vision via a **subagent split**: the lead agent stays on a text-only thinking model (`deepseek-v4-pro` in trademind) so its reasoning chain is preserved, and image work is delegated to two builtin subagents, each on a different Qwen-VL variant tuned for its task:
 
 - `vision-analyst` (`src/subagents/builtins/vision_analyst.py`, model `qwen-vl-plus-latest`) — free-form image Q&A, returns natural-language observations only.
-- `ocr-extractor` (`src/subagents/builtins/ocr_extractor.py`, model `qwen-vl-ocr-latest`) — structured trade-document OCR, returns a strict JSON envelope (see `ocr_schemas.py::OcrEnvelope`) written to `/mnt/user-data/outputs/<doc_type>_ocr.json` and surfaced via `present_files`.
+- `ocr-extractor` (`src/subagents/builtins/ocr_extractor.py`, model `qwen-vl-max-latest`) — structured trade-document OCR, returns a strict JSON envelope (see `ocr_schemas.py::OcrEnvelope`) written to `/mnt/user-data/outputs/<doc_type>_ocr.json` and surfaced via `present_files`. We tried `qwen-vl-ocr-latest` first; it 400s with "messages do not contain elements with the role of user" because the OCR-specialised checkpoint is a stateless single-turn model that rejects system messages, multi-turn history, and tool-call sequences — which is exactly what the LangChain `create_agent` + `view_image_tool` flow generates. `qwen-vl-max-latest` accepts the full agent protocol and OCR fidelity is on par.
 
 The lead agent's system prompt has a `<vision_routing>` block that auto-delegates by attachment + intent — users never have to switch models or call subagents by hand.
 

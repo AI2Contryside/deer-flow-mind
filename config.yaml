@@ -44,15 +44,23 @@ models:
   # ChatOpenAI works directly — no extra SDK install needed.
   #
   # Two distinct models on purpose:
-  #   * qwen-vl-ocr-latest is tuned for character-fidelity OCR of dense
-  #     trade documents (invoices, packing lists, B/L) — used by
-  #     `ocr-extractor`.
-  #   * qwen-vl-plus-latest is the general vision-QA model for product
-  #     photos / factory shots / screenshots — used by `vision-analyst`.
-  - name: qwen-vl-ocr-latest
-    display_name: 通义千问 VL-OCR (latest)
+  #   * qwen-vl-max-latest is used by `ocr-extractor` for dense
+  #     trade-document OCR. We tried qwen-vl-ocr-latest first but it is
+  #     a stateless single-turn model — it rejects requests with system
+  #     messages, multi-turn history, or tool-call sequences (400
+  #     "messages do not contain elements with the role of user"),
+  #     which is exactly the shape the LangChain `create_agent` +
+  #     view_image_tool flow produces. qwen-vl-max-latest accepts the
+  #     full agent protocol and OCR fidelity is on par with -ocr in our
+  #     own basket of trade-document tests.
+  #   * qwen-vl-plus-latest is the lighter general vision-QA model for
+  #     product photos / factory shots / screenshots — used by
+  #     `vision-analyst`. Cost-optimised vs -max because non-OCR
+  #     workloads don't need the bigger model.
+  - name: qwen-vl-max-latest
+    display_name: 通义千问 VL-Max (latest)
     use: langchain_openai:ChatOpenAI
-    model: qwen-vl-ocr-latest
+    model: qwen-vl-max-latest
     api_key: $DASHSCOPE_API_KEY
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     max_tokens: 4096
