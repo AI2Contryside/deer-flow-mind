@@ -360,6 +360,24 @@ async def test_awrap_tool_call_routes_clarification_through_handler(monkeypatch)
         await middleware.awrap_tool_call(request, handler)
 
 
+def test_ask_clarification_tool_is_not_return_direct():
+    # Regression guard: with the interrupt()/resume design, the tools→model
+    # edge in langchain's create_agent (factory.py `_make_tools_to_model_edge`)
+    # routes to END when EVERY client-side tool call on the last AIMessage has
+    # return_direct=True. If ask_clarification is flagged return_direct, then
+    # after the user submits an answer and ClarificationMiddleware commits the
+    # ToolMessage + HumanMessage, the agent exits instead of letting the model
+    # react — i.e. the model silently never replies to the clarification
+    # answer. Keep return_direct off so the loop continues into the model node.
+    # Import the leaf module directly: src.tools.builtins.__init__ pulls in
+    # present_file_tool, which in turn imports the oss2 SDK. That dependency
+    # isn't installed in the test env (and shouldn't be, for a unit test of a
+    # config flag), so we sidestep the package-level re-export.
+    from src.tools.builtins.clarification_tool import ask_clarification_tool
+
+    assert ask_clarification_tool.return_direct is False, "ask_clarification must NOT be return_direct — see ClarificationMiddleware docstring + clarification_tool.py comment for why."
+
+
 def test_handle_clarification_returns_command_when_interrupt_resumes(monkeypatch):
     # Simulate the resume path: re-execution of ``_handle_clarification``
     # where ``interrupt()`` returns the resume value rather than raising.

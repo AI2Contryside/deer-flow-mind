@@ -3,7 +3,22 @@ from typing import Any, Literal
 from langchain.tools import tool
 
 
-@tool("ask_clarification", parse_docstring=True, return_direct=True)
+# return_direct must stay False here. Why:
+#   ClarificationMiddleware now pauses execution via ``interrupt()`` and, on
+#   resume, re-enters wrap_tool_call to commit a ToolMessage(formatted_question)
+#   plus a HumanMessage(answer) via Command(update=...). After that update,
+#   control flows through langchain's `tools_to_model` edge (factory.py
+#   `_make_tools_to_model_edge`), which short-circuits to END whenever every
+#   client-side tool call on the last AIMessage has return_direct=True. Setting
+#   return_direct=True on this tool therefore caused the post-resume run to
+#   exit instead of letting the model react to the user's reply — the agent
+#   silently did nothing after the user submitted a clarification answer.
+#
+#   Under the old Command(goto=END) design, return_direct=True was harmless
+#   because the goto explicitly ended the run before this edge ran. The flag
+#   only became load-bearing — and load-bearing in the wrong direction —
+#   once the middleware switched to interrupt()/resume.
+@tool("ask_clarification", parse_docstring=True)
 def ask_clarification_tool(
     question: str,
     clarification_type: Literal[

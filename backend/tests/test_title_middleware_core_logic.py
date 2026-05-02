@@ -111,6 +111,33 @@ class TestTitleMiddlewareCoreLogic:
         assert title.endswith("...")
         assert title.startswith("这是一个非常长的问题描述")
 
+    def test_generate_title_tags_invocation_as_internal(self, monkeypatch):
+        # The title prompt's response must not leak into the user-visible chat
+        # stream. We rely on the gateway/FE filter to drop messages/partial
+        # events whose run carries `internal_invocation == "title"` metadata or
+        # the `internal:title` tag. Guard the contract here so the filter keys
+        # never silently drift.
+        _set_test_title_config(max_chars=60)
+        middleware = TitleMiddleware()
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(return_value=MagicMock(content="标题"))
+        monkeypatch.setattr("src.agents.middlewares.title_middleware.create_chat_model", lambda **kwargs: fake_model)
+
+        state = {
+            "messages": [
+                HumanMessage(content="你是哪个模型？"),
+                AIMessage(content="我是助理。"),
+            ]
+        }
+        asyncio.run(middleware._generate_title(state))
+
+        assert fake_model.ainvoke.await_count == 1
+        _, kwargs = fake_model.ainvoke.await_args
+        run_config = kwargs.get("config")
+        assert run_config is not None, "TitleMiddleware must pass a RunnableConfig to ainvoke"
+        assert "internal:title" in run_config.get("tags", [])
+        assert run_config.get("metadata", {}).get("internal_invocation") == "title"
+
     def test_after_agent_returns_title_only_when_needed(self, monkeypatch):
         middleware = TitleMiddleware()
         monkeypatch.setattr(middleware, "_should_generate_title", lambda state: True)

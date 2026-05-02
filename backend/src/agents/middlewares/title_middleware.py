@@ -65,8 +65,19 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
             assistant_msg=assistant_msg[:500],
         )
 
+        # Tag this invocation as an internal middleware call so the gateway /
+        # FE can filter its messages/partial events out of the user-visible
+        # chat stream. Without these tags, the title prompt's response leaks
+        # into the conversation as a final assistant bubble (regression seen
+        # on first-round chats: a "Generate a concise title…" reply landed
+        # right after the real answer).
+        title_run_config = {
+            "tags": ["internal:title"],
+            "metadata": {"internal_invocation": "title"},
+            "run_name": "TitleMiddleware.generate",
+        }
         try:
-            response = await model.ainvoke(prompt)
+            response = await model.ainvoke(prompt, config=title_run_config)
             # Ensure response content is string
             title_content = str(response.content) if response.content else ""
             title = title_content.strip().strip('"').strip("'")

@@ -31,3 +31,13 @@ _executor_mock.MAX_CONCURRENT_SUBAGENTS = 3
 _executor_mock.get_background_task_result = MagicMock()
 
 sys.modules["src.subagents.executor"] = _executor_mock
+
+# ``src.tools.builtins.__init__`` re-exports every builtin tool, so importing
+# ANY tool module via the package (e.g. ``from src.tools.builtins.clarification_tool
+# import ask_clarification_tool``) eagerly imports ``present_file_tool`` which
+# imports ``src.storage`` -> ``oss2``. ``oss2`` isn't a runtime dep for unit
+# tests of unrelated tool flags, so stub it the same way we stub the executor.
+_oss2_mock = MagicMock()
+_oss2_mock.Auth = MagicMock
+_oss2_mock.Bucket = MagicMock
+sys.modules["oss2"] = _oss2_mock
