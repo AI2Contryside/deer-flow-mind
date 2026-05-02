@@ -23,7 +23,7 @@ def task_tool(
     runtime: ToolRuntime[ContextT, ThreadState],
     description: str,
     prompt: str,
-    subagent_type: Literal["general-purpose", "bash", "vision-analyst", "ocr-extractor"],
+    subagent_type: Literal["general-purpose", "bash", "vision-analyst"],
     tool_call_id: Annotated[str, InjectedToolCallId],
     max_turns: int | None = None,
 ) -> str:
@@ -44,11 +44,12 @@ def task_tool(
       Delegate when the user attaches a non-document image (product photo, factory
       shot, screenshot, etc.) and asks about its content. Returns natural-language
       observations only — never JSON, never ERPNext writes.
-    - **ocr-extractor**: Foreign-trade document OCR specialist. Delegate when the
-      user attaches a structured trade document image (Commercial Invoice, Packing
-      List, B/L, Customs Declaration, Proforma Invoice). Returns a strict JSON
-      envelope written to ``/mnt/user-data/outputs/<doc_type>_ocr.json`` and
-      surfaced via ``present_files`` so the desktop client renders a typed card.
+
+    Note: structured trade-document OCR is NOT a subagent — it's the
+    ``extract_trade_document`` builtin tool, which makes a single
+    qwen-vl-ocr call rather than spinning up an agent loop. Use that
+    tool directly for invoices / packing lists / B/L / customs
+    declarations / proforma invoices.
 
     Note: tenant onboarding (Q&A + ERPNext seeding + profile.json) is NOT a
     subagent any more — the lead agent runs it inline because subagents have
@@ -74,7 +75,7 @@ def task_tool(
     # Get subagent configuration
     config = get_subagent_config(subagent_type)
     if config is None:
-        return f"Error: Unknown subagent type '{subagent_type}'. Available: general-purpose, bash, vision-analyst, ocr-extractor"
+        return f"Error: Unknown subagent type '{subagent_type}'. Available: general-purpose, bash, vision-analyst"
 
     # Build config overrides
     overrides: dict = {}

@@ -93,8 +93,13 @@ def test_get_subagent_config_returns_vision_analyst() -> None:
     assert cfg.model == "qwen-vl-plus-latest"
 
 
-def test_task_tool_literal_accepts_vision_subagents() -> None:
-    """task_tool's subagent_type Literal must include the new values."""
+def test_task_tool_literal_accepts_vision_analyst() -> None:
+    """task_tool's subagent_type Literal must include vision-analyst.
+
+    ocr-extractor was removed in favour of the
+    ``extract_trade_document`` builtin tool; see
+    ``test_extract_trade_document_tool.py`` for the symmetric removal
+    assertion."""
     from src.tools.builtins.task_tool import task_tool
 
     # ``task_tool`` is wrapped by ``@tool``; the underlying callable
@@ -108,7 +113,6 @@ def test_task_tool_literal_accepts_vision_subagents() -> None:
     assert "general-purpose" in args
     assert "bash" in args
     assert "vision-analyst" in args
-    assert "ocr-extractor" in args
 
 
 def test_build_subagent_runtime_middlewares_appends_view_image() -> None:
@@ -135,19 +139,23 @@ def test_build_subagent_runtime_middlewares_appends_view_image() -> None:
 def test_qwen_vl_models_loadable(loaded_app_config) -> None:
     """config.yaml exposes both Qwen-VL variants with supports_vision=True.
 
-    Two distinct models on purpose: qwen-vl-ocr-latest tuned for dense
-    document OCR (used by ocr-extractor), qwen-vl-plus-latest for
-    general image Q&A (used by vision-analyst). Both must report
-    ``supports_vision=True`` so the executor wires up
-    ViewImageMiddleware + view_image_tool, and neither must claim
-    ``supports_thinking`` (Qwen-VL series has no thinking mode in the
-    DashScope OpenAI-compat protocol — flagging it would enable a
-    thinking parameter the gateway would 400 on).
+    Two distinct models, two different invocation paths:
+    - ``qwen-vl-ocr-latest`` is consumed by the
+      ``extract_trade_document`` builtin tool via direct
+      ``model.invoke([HumanMessage(image+text)])`` — the model rejects
+      the multi-turn / system-prompt shape a subagent produces, so it
+      cannot be a subagent's model.
+    - ``qwen-vl-plus-latest`` is the model for the ``vision-analyst``
+      subagent (multi-turn agent loop is fine here).
+
+    Neither must claim ``supports_thinking`` — Qwen-VL has no thinking
+    mode in the DashScope OpenAI-compat protocol; flagging it would
+    enable a thinking parameter the gateway would 400 on.
     """
     from src.config import get_app_config
 
     app_cfg = get_app_config()
-    for name in ("qwen-vl-max-latest", "qwen-vl-plus-latest"):
+    for name in ("qwen-vl-ocr-latest", "qwen-vl-plus-latest"):
         cfg = app_cfg.get_model_config(name)
         assert cfg is not None, f"{name} missing from config.yaml models[]"
         assert cfg.supports_vision is True

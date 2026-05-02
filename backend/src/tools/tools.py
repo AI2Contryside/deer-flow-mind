@@ -4,13 +4,25 @@ from langchain.tools import BaseTool
 
 from src.config import get_app_config
 from src.reflection import resolve_variable
-from src.tools.builtins import ask_clarification_tool, present_file_tool, task_tool, view_image_tool
+from src.tools.builtins import (
+    ask_clarification_tool,
+    extract_trade_document_tool,
+    present_file_tool,
+    task_tool,
+    view_image_tool,
+)
 
 logger = logging.getLogger(__name__)
 
+# extract_trade_document_tool sits in BUILTIN_TOOLS (always available)
+# rather than gated on supports_vision because the lead agent runs on a
+# text-only model — the tool internally invokes qwen-vl-ocr-latest in
+# a single pass, so the calling agent doesn't need vision support of
+# its own.
 BUILTIN_TOOLS = [
     present_file_tool,
     ask_clarification_tool,
+    extract_trade_document_tool,
 ]
 
 SUBAGENT_TOOLS = [
