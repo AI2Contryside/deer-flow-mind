@@ -49,3 +49,63 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=8.0.0", "ruff>=0.14.11"]
+
+# === SANDBOX FALLBACK DEPS START ==============================================
+# Packages the agent reaches for via the `bash` tool when running in
+# LocalSandbox mode (i.e. directly inside this venv). The same set is baked
+# into the AIO sandbox image at deer-flow-mind/docker/sandbox/requirements.lock
+# — keep the two lists in sync until LocalSandbox is retired.
+#
+# Migration tracker: docs/AIO_SANDBOX_MIGRATION_PLAN.md
+#
+# To install locally: `uv sync --group sandbox-fallback`
+# To remove this group entirely once AIO is the only sandbox mode: delete
+# everything between the START / END markers below — uv will drop the group
+# on next sync. Packages already declared in [project].dependencies (docling,
+# python-docx, python-calamine, duckdb, markdownify, pyyaml, httpx, pydantic)
+# are intentionally NOT repeated here.
+sandbox-fallback = [
+    # Excel
+    "openpyxl>=3.1,<4",
+    "xlsxwriter>=3.2,<4",
+    "xlrd>=2.0,<3",
+    # Word (python-docx, python-calamine already in [project].dependencies)
+    "docx2txt>=0.8,<1",
+    "mammoth>=1.8,<2",
+    # PDF read
+    "pypdf>=4.0,<6",
+    "pdfplumber>=0.11,<1",
+    "pymupdf>=1.24,<2",
+    # PDF write
+    "reportlab>=4.0,<5",
+    # PowerPoint
+    "python-pptx>=1.0,<2",
+    # Images
+    "pillow>=10.0,<12",
+    # HTML / Markdown (markdownify already in [project].dependencies)
+    "beautifulsoup4>=4.12,<5",
+    "lxml>=5.0,<7",
+    "markdown>=3.5,<4",
+    "html2text>=2024.2.26,<2026",
+    # Tabular / dataframe (duckdb already in [project].dependencies)
+    "pandas>=2.2,<3",
+    "numpy>=1.26,<3",
+    "pyarrow>=16,<22",
+    "polars>=1.0,<2",
+    # Charts (Python side — chart-visualization skill itself is Node)
+    "matplotlib>=3.8,<4",
+    "seaborn>=0.13,<1",
+    # Networking (httpx already in [project].dependencies)
+    "requests>=2.31,<3",
+    # Utilities
+    "click>=8.1,<9",
+    "tomli>=2.0,<3",
+    "python-dateutil>=2.9,<3",
+    "rich>=13.7,<15",
+    "tqdm>=4.66,<5",
+    "jsonschema>=4.21,<5",
+    # Encoding helpers
+    "chardet>=5.2,<6",
+    "charset-normalizer>=3.3,<4",
+]
+# === SANDBOX FALLBACK DEPS END ================================================
