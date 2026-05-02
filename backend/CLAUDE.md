@@ -502,10 +502,21 @@ See [docs/summarization.md](docs/summarization.md) for details.
 
 ### Vision Support
 
-For models with `supports_vision: true`:
-- `ViewImageMiddleware` processes images in conversation
-- `view_image_tool` added to agent's toolset
-- Images automatically converted to base64 and injected into state
+DeerFlow exposes vision via a **subagent split**: the lead agent stays on a text-only thinking model (`deepseek-v4-pro` in trademind) so its reasoning chain is preserved, and image work is delegated to two builtin subagents that run on a vision-capable model (`glm-4v-plus`):
+
+- `vision-analyst` (`src/subagents/builtins/vision_analyst.py`) — free-form image Q&A, returns natural-language observations only.
+- `ocr-extractor` (`src/subagents/builtins/ocr_extractor.py`) — structured trade-document OCR, returns a strict JSON envelope (see `ocr_schemas.py::OcrEnvelope`) written to `/mnt/user-data/outputs/<doc_type>_ocr.json` and surfaced via `present_files`.
+
+The lead agent's system prompt has a `<vision_routing>` block that auto-delegates by attachment + intent — users never have to switch models or call subagents by hand.
+
+For any model with `supports_vision: true`, the runtime auto-wires:
+- `ViewImageMiddleware` is appended to the agent's middleware chain (lead agent direct, subagents via `build_subagent_runtime_middlewares(include_view_image=True)`)
+- `view_image_tool` is added to `get_available_tools()` output
+- Images flow through the tool → `viewed_images` state → re-injected as `image_url` content blocks on the next `HumanMessage`
+
+`task_tool` resolves the *subagent's* effective model (not the parent's) when picking the tool list, so a vision subagent gets `view_image_tool` even when the lead agent runs on a text-only model.
+
+Required env var when using image/OCR features: `ZHIPU_API_KEY`. See `DEV_ENV.md` (workspace root) and `.env.example` for the full key.
 
 ## Code Style
 

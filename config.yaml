@@ -37,6 +37,21 @@ models:
     api_base: https://api.deepseek.com
     supports_thinking: true
 
+  # Vision model for image understanding via subagents (vision-analyst,
+  # ocr-extractor). Lead agent stays on deepseek-v4-pro so thinking is
+  # preserved; vision is invoked only when lead delegates a vision/OCR task.
+  # Zhipu BigModel exposes an OpenAI-compatible endpoint, so ChatOpenAI
+  # works directly — no extra SDK install needed.
+  - name: glm-4v-plus
+    display_name: 智谱 GLM-4V Plus (vision)
+    use: langchain_openai:ChatOpenAI
+    model: glm-4v-plus
+    api_key: $ZHIPU_API_KEY
+    base_url: https://open.bigmodel.cn/api/paas/v4/
+    max_tokens: 4096
+    temperature: 0
+    supports_vision: true
+
 # ============================================================================
 # Tool Groups Configuration
 # ============================================================================

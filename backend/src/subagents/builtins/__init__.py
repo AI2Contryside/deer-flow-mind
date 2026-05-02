@@ -2,10 +2,14 @@
 
 from .bash_agent import BASH_AGENT_CONFIG
 from .general_purpose import GENERAL_PURPOSE_CONFIG
+from .ocr_extractor import OCR_EXTRACTOR_CONFIG
+from .vision_analyst import VISION_ANALYST_CONFIG
 
 __all__ = [
     "BASH_AGENT_CONFIG",
     "GENERAL_PURPOSE_CONFIG",
+    "OCR_EXTRACTOR_CONFIG",
+    "VISION_ANALYST_CONFIG",
 ]
 
 # Registry of built-in subagents
@@ -18,4 +22,6 @@ __all__ = [
 BUILTIN_SUBAGENTS = {
     "general-purpose": GENERAL_PURPOSE_CONFIG,
     "bash": BASH_AGENT_CONFIG,
+    "vision-analyst": VISION_ANALYST_CONFIG,
+    "ocr-extractor": OCR_EXTRACTOR_CONFIG,
 }

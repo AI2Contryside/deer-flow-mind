@@ -23,7 +23,7 @@ def task_tool(
     runtime: ToolRuntime[ContextT, ThreadState],
     description: str,
     prompt: str,
-    subagent_type: Literal["general-purpose", "bash"],
+    subagent_type: Literal["general-purpose", "bash", "vision-analyst", "ocr-extractor"],
     tool_call_id: Annotated[str, InjectedToolCallId],
     max_turns: int | None = None,
 ) -> str:
@@ -40,6 +40,15 @@ def task_tool(
       multiple dependent steps, or would benefit from isolated context.
     - **bash**: Command execution specialist for running bash commands. Use for
       git operations, build processes, or when command output would be verbose.
+    - **vision-analyst**: Image understanding specialist running on a vision model.
+      Delegate when the user attaches a non-document image (product photo, factory
+      shot, screenshot, etc.) and asks about its content. Returns natural-language
+      observations only — never JSON, never ERPNext writes.
+    - **ocr-extractor**: Foreign-trade document OCR specialist. Delegate when the
+      user attaches a structured trade document image (Commercial Invoice, Packing
+      List, B/L, Customs Declaration, Proforma Invoice). Returns a strict JSON
+      envelope written to ``/mnt/user-data/outputs/<doc_type>_ocr.json`` and
+      surfaced via ``present_files`` so the desktop client renders a typed card.
 
     Note: tenant onboarding (Q&A + ERPNext seeding + profile.json) is NOT a
     subagent any more — the lead agent runs it inline because subagents have
@@ -65,7 +74,7 @@ def task_tool(
     # Get subagent configuration
     config = get_subagent_config(subagent_type)
     if config is None:
-        return f"Error: Unknown subagent type '{subagent_type}'. Available: general-purpose, bash"
+        return f"Error: Unknown subagent type '{subagent_type}'. Available: general-purpose, bash, vision-analyst, ocr-extractor"
 
     # Build config overrides
     overrides: dict = {}
@@ -119,8 +128,15 @@ def task_tool(
     # Lazy import to avoid circular dependency
     from src.tools import get_available_tools
 
+    # Resolve the *subagent's* effective model so vision-capable subagents
+    # (e.g. vision-analyst, ocr-extractor) get ``view_image_tool`` even when
+    # the parent (lead) agent runs on a text-only model. Without this, a
+    # ``model="glm-4v-plus"`` subagent inherits the parent's tool list and
+    # silently loses the vision tool that its prompt instructs it to call.
+    subagent_model_name = config.model if config.model != "inherit" else parent_model
+
     # Subagents should not have subagent tools enabled (prevent recursive nesting)
-    tools = get_available_tools(model_name=parent_model, subagent_enabled=False)
+    tools = get_available_tools(model_name=subagent_model_name, subagent_enabled=False)
 
     # Create executor
     executor = SubagentExecutor(

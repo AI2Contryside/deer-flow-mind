@@ -179,10 +179,37 @@ class SubagentExecutor:
         model_name = _get_model_name(self.config, self.parent_model)
         model = create_chat_model(name=model_name, thinking_enabled=False)
 
+        # Look up the resolved model's vision capability so the runtime
+        # middleware chain can conditionally include ``ViewImageMiddleware``.
+        # Without this, a vision-capable subagent (e.g. glm-4v-plus) calls
+        # ``view_image_tool`` which writes base64 into state, but the
+        # middleware that re-injects those bytes as an ``image_url`` block
+        # on the next HumanMessage is missing — and the model effectively
+        # never sees the image. Best-effort: any lookup failure collapses
+        # to ``include_view_image=False`` so non-vision subagents are
+        # unaffected.
+        supports_vision = False
+        if model_name:
+            try:
+                from src.config import get_app_config
+
+                model_config = get_app_config().get_model_config(model_name)
+                supports_vision = bool(model_config and model_config.supports_vision)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "[trace=%s] Failed to resolve supports_vision for subagent model '%s': %s",
+                    self.trace_id,
+                    model_name,
+                    exc,
+                )
+
         from src.agents.middlewares.tool_error_handling_middleware import build_subagent_runtime_middlewares
 
         # Reuse shared middleware composition with lead agent.
-        middlewares = build_subagent_runtime_middlewares(lazy_init=True)
+        middlewares = build_subagent_runtime_middlewares(
+            lazy_init=True,
+            include_view_image=supports_vision,
+        )
 
         return create_agent(
             model=model,

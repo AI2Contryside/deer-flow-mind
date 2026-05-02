@@ -69,9 +69,19 @@ def _build_runtime_middlewares(
     *,
     include_uploads: bool,
     include_dangling_tool_call_patch: bool,
+    include_view_image: bool = False,
     lazy_init: bool = True,
 ) -> list[AgentMiddleware]:
-    """Build shared base middlewares for agent execution."""
+    """Build shared base middlewares for agent execution.
+
+    ``include_view_image`` controls whether ``ViewImageMiddleware`` is
+    appended to the chain. When True, any ``view_image`` tool call made
+    by the agent will have its base64 payload re-injected as an
+    ``image_url`` content block on the next ``HumanMessage`` so the
+    underlying vision model can actually "see" the image. Required for
+    vision-capable subagents (vision-analyst, ocr-extractor) — without it
+    the tool writes to state but the next LLM call gets no pixels.
+    """
     from src.agents.middlewares.thread_data_middleware import ThreadDataMiddleware
     from src.sandbox.middleware import SandboxMiddleware
 
@@ -103,6 +113,11 @@ def _build_runtime_middlewares(
     if get_tool_output_config().enabled:
         middlewares.append(ToolOutputTruncationMiddleware())
 
+    if include_view_image:
+        from src.agents.middlewares.view_image_middleware import ViewImageMiddleware
+
+        middlewares.append(ViewImageMiddleware())
+
     return middlewares
 
 
@@ -115,10 +130,20 @@ def build_lead_runtime_middlewares(*, lazy_init: bool = True) -> list[AgentMiddl
     )
 
 
-def build_subagent_runtime_middlewares(*, lazy_init: bool = True) -> list[AgentMiddleware]:
-    """Middlewares shared by subagent runtime before subagent-only middlewares."""
+def build_subagent_runtime_middlewares(
+    *,
+    lazy_init: bool = True,
+    include_view_image: bool = False,
+) -> list[AgentMiddleware]:
+    """Middlewares shared by subagent runtime before subagent-only middlewares.
+
+    ``include_view_image`` should be True for subagents whose effective
+    model has ``supports_vision=True`` so ``view_image_tool`` actually
+    feeds pixels back to the model on the next turn.
+    """
     return _build_runtime_middlewares(
         include_uploads=False,
         include_dangling_tool_call_patch=False,
+        include_view_image=include_view_image,
         lazy_init=lazy_init,
     )
