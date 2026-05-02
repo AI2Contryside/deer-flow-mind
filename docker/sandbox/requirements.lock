@@ -1,0 +1,83 @@
+# =============================================================================
+# Sandbox base Python dependencies
+# =============================================================================
+# Baked into the AIO sandbox overlay image so that agents can read/write
+# Excel / Word / PDF / PPT / CSV / images / HTML without paying the cost of
+# `pip install` on every cold start (the on-demand pattern in
+# skills/public/data-analysis/scripts/analyze.py is what we are replacing).
+#
+# Pinning policy:
+#   - lower bounds on the major.minor we depend on (matches backend pyproject
+#     when both run the same package, e.g. duckdb, python-docx)
+#   - upper-exclusive on the next major to keep agent-written code stable
+#   - DO NOT pin patch — let the proxy serve the latest patch on rebuild
+#   - DO NOT include docling / playwright / heavy ML — those belong to the
+#     backend gateway image, not the sandbox.
+#
+# Version-resolution caveats:
+#   - python-calamine wheels exist for Linux x86_64 / arm64 on Python 3.12
+#   - pymupdf >=1.24 is required for Python 3.12 (older wheels miss 3.12)
+#   - polars CPU-feature wheels: prefer `polars-lts-cpu` if devbox CPU is old
+#     (uncomment the alt line below if `polars` segfaults on `illegal instruction`)
+
+# ── Excel ────────────────────────────────────────────────────────────────────
+openpyxl>=3.1,<4
+xlsxwriter>=3.2,<4
+python-calamine>=0.3.0,<1     # fast read-only xlsx (CLAUDE.md notes this for large files)
+xlrd>=2.0,<3                  # legacy .xls only
+
+# ── Word ─────────────────────────────────────────────────────────────────────
+python-docx>=1.1.0,<2         # backend pyproject already pins >=1.1.0
+docx2txt>=0.8,<1
+mammoth>=1.8,<2               # docx → html / markdown for agents that want structured fallback
+
+# ── PDF (read) ───────────────────────────────────────────────────────────────
+pypdf>=4.0,<6                 # pypdf2 successor; pure-python, safe everywhere
+pdfplumber>=0.11,<1           # table extraction
+pymupdf>=1.24,<2              # fitz — fast layout + text + image extraction
+
+# ── PDF (write) ──────────────────────────────────────────────────────────────
+reportlab>=4.0,<5
+
+# ── PowerPoint ───────────────────────────────────────────────────────────────
+python-pptx>=1.0,<2
+
+# ── Images ───────────────────────────────────────────────────────────────────
+pillow>=10.0,<12
+
+# ── HTML / Markdown ──────────────────────────────────────────────────────────
+beautifulsoup4>=4.12,<5
+lxml>=5.0,<7                  # required by mammoth / pdfplumber / many xml workflows
+markdown>=3.5,<4
+markdownify>=0.13,<2          # html → md for agent reasoning over scraped pages
+html2text>=2024.2.26,<2026
+
+# ── Tabular / Dataframe ──────────────────────────────────────────────────────
+pandas>=2.2,<3
+numpy>=1.26,<3
+pyarrow>=16,<22               # parquet, feather, arrow IPC
+polars>=1.0,<2                # if devbox CPU lacks AVX2, swap to polars-lts-cpu
+# polars-lts-cpu>=1.0,<2      # ← uncomment instead of polars on old CPUs
+duckdb>=1.4.4,<2              # backend pyproject pins this exact lower bound
+
+# ── Charts (Python-side; chart-visualization skill itself uses Node) ─────────
+matplotlib>=3.8,<4
+seaborn>=0.13,<1
+
+# ── Networking ───────────────────────────────────────────────────────────────
+requests>=2.31,<3
+httpx>=0.27,<1
+
+# ── Common utilities ─────────────────────────────────────────────────────────
+click>=8.1,<9                 # erpnext-cli launcher
+pydantic>=2.7,<3
+pyyaml>=6.0,<7
+tomli>=2.0,<3                 # 3.11+ has tomllib stdlib but tomli still needed for write
+python-dateutil>=2.9,<3
+rich>=13.7,<15
+tqdm>=4.66,<5
+jsonschema>=4.21,<5
+
+# ── Encoding / parsing helpers ───────────────────────────────────────────────
+chardet>=5.2,<6               # heuristic charset detection for legacy CSV
+charset-normalizer>=3.3,<4
