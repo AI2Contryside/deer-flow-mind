@@ -94,8 +94,21 @@ def _build_extract_prompt() -> str:
     the model to hold 300+ items in working memory degrades extraction
     quality even when the JSON would fit. Headers and totals stay
     unconstrained; they're always small.
+
+    The doc-type taxonomy now spans international trade (commercial
+    invoice / packing list / B-L / customs / proforma), domestic trade
+    (sales order / delivery note), and a ``generic_table`` fallback for
+    anything tabular that doesn't match a named type. ``unknown`` is
+    truly the last resort — see schema block for the selection
+    priority — so users uploading a hand-written sales slip get
+    structured rows back instead of an empty envelope.
     """
-    return f"""请对这张外贸单据图片做严格 OCR 与字段抽取，**只输出 JSON**，不要解释、不要 markdown 代码块包裹。
+    return f"""请对这张单据/表格图片做严格 OCR 与字段抽取，**只输出 JSON**，不要解释、不要 markdown 代码块包裹。
+
+支持的单据范围：
+  - 国际贸易：商业发票 / 装箱单 / 提单(B/L) / 报关单 / 形式发票(PI)
+  - 国内贸易：销售订单(销货单) / 送货单(发货单)
+  - 通用兜底：任何带表格结构的图片（价目表、库存表、手写收据等）→ ``generic_table``
 
 输出 schema：
 
@@ -104,16 +117,19 @@ def _build_extract_prompt() -> str:
 **输出长度约束（必须遵守，否则 JSON 会被截断）：**
 
 1. ``raw_text`` 仅包含**单据头部信息**：标题、单号、日期、客户名/供应商名、地址、说明、合同条款等元数据。
-   **不要**逐行抄写商品明细表格——明细已经放在 ``structured.items`` 里。``raw_text`` 控制在 1000 字以内。
+   **不要**逐行抄写商品明细表格——明细已经放在 ``structured.items`` (typed) 或 ``structured.rows`` (generic_table) 里。``raw_text`` 控制在 1000 字以内。
 
-2. ``structured.items`` 最多输出 **{MAX_LINE_ITEMS_PER_CALL}** 行。如果实际行数更多：
+2. ``structured.items`` / ``structured.rows`` 最多输出 **{MAX_LINE_ITEMS_PER_CALL}** 行。如果实际行数更多：
    - 抽取**前 {MAX_LINE_ITEMS_PER_CALL} 行**（按图上从上到下顺序）
    - 在 ``notes`` 中写明："明细共 N 行，已抽取前 {MAX_LINE_ITEMS_PER_CALL} 行；如需完整数据请拆分图片或导出 Excel"
    - 优先保证已抽取行的字段准确，**不要**为了塞下更多行而省略字段
 
-3. 头部字段（invoice_no, total_amount, currency 等）**始终完整输出**，不受上面约束。
+3. 头部字段（invoice_no / order_no / total_amount / currency 等）**始终完整输出**，不受上面约束。
 
-如果不是外贸单据或图片不清晰，``detected_doc_type`` 填 ``"unknown"``、``confidence`` 填 0~0.3、``raw_text`` 填看到的所有文字（同样 ≤1000 字）、``structured`` 填 null、``notes`` 写一句简短说明。"""
+**最终提醒：**
+- ``confidence`` 表示文字识别质量，看清楚就给 ≥0.85，**不要**因为分类不是外贸单据就降分。
+- 在选择 ``unknown`` 之前**先尝试** ``generic_table``——只要能看出表格结构就用 generic_table。
+- 真正的 ``unknown``（图像无法辨认）：``confidence`` 填 0~0.4、``raw_text`` 填能看到的所有文字（≤1000 字）、``structured`` 填 null、``notes`` 写一句简短说明。"""
 
 
 def _strip_code_fence(text: str) -> str:
@@ -536,26 +552,64 @@ def _format_summary(envelope: OcrEnvelope, output_virtual_path: str) -> str:
     不要把整段 JSON 贴在聊天里"). We intentionally do NOT dump the full
     JSON envelope into the message — that's what the artifact card is
     for, and pasting JSON is exactly what we're trying to avoid.
+
+    Doc-type-specific headline fields:
+      * Trade docs (invoice/PL/BL/customs/PI/sales_order/delivery_note)
+        share a flat (attr, label) lookup table — ``getattr`` returns
+        None for fields the doc type doesn't have, so the table covers
+        every named type without per-type branching.
+      * ``generic_table`` has a different shape (title/meta/rows/totals)
+        and gets its own short branch.
     """
     pct = round(envelope.confidence * 100)
     doc_type = envelope.detected_doc_type
     bullets: list[str] = []
     structured = envelope.structured
-    if structured is not None:
+
+    if structured is not None and doc_type == "generic_table":
+        # GenericTable — surface title, the first 1-2 meta entries
+        # (单号/日期 等), the row count, and the first totals entry.
+        title = getattr(structured, "title", None)
+        if title:
+            bullets.append(f"标题={title}")
+        meta = getattr(structured, "meta", None) or []
+        for entry in meta[:2]:
+            key = getattr(entry, "key", None)
+            value = getattr(entry, "value", None)
+            if key and value:
+                bullets.append(f"{key}={value}")
+        rows = getattr(structured, "rows", None) or []
+        if rows:
+            bullets.append(f"行数={len(rows)}")
+        totals = getattr(structured, "totals", None) or []
+        if totals:
+            first = totals[0]
+            key = getattr(first, "key", None)
+            value = getattr(first, "value", None)
+            if key and value:
+                bullets.append(f"{key}={value}")
+    elif structured is not None:
         # Pull doc-type-specific headline fields. We use getattr with a
-        # default of None so this stays robust against schema additions.
+        # default of None so this stays robust against schema additions
+        # — every attr is checked against every named type, but only
+        # the type's own attrs come back non-None.
         for attr, label in (
             ("invoice_no", "单号"),
             ("pl_no", "装箱单号"),
             ("bl_no", "提单号"),
             ("declaration_no", "报关单号"),
+            ("order_no", "订单号"),
+            ("dn_no", "送货单号"),
             ("invoice_date", "日期"),
             ("pl_date", "日期"),
             ("bl_date", "日期"),
             ("declaration_date", "日期"),
+            ("order_date", "日期"),
+            ("dn_date", "日期"),
             ("total_amount", "金额"),
             ("currency", "币种"),
             ("total_packages", "总件数"),
+            ("total_quantity", "总数量"),
         ):
             val = getattr(structured, attr, None)
             if val is None:
@@ -569,6 +623,7 @@ def _format_summary(envelope: OcrEnvelope, output_virtual_path: str) -> str:
         items = getattr(structured, "items", None) or []
         if items:
             bullets.append(f"商品行数={len(items)}")
+
     bullets_text = ("，" + "，".join(bullets)) if bullets else ""
     notes = f"\n备注：{envelope.notes}" if envelope.notes else ""
     return f"已识别 {doc_type}（置信度 {pct}%{bullets_text}）。完整 JSON 已写到 {output_virtual_path}，已自动推送给用户的 Canvas 卡片。{notes}"
