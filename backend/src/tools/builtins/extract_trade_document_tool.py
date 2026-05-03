@@ -404,14 +404,6 @@ def extract_trade_document_tool(
     # populated, so we mirror it into the recorder ourselves.
     try:
         usage = getattr(response, "usage_metadata", None) or {}
-        # TEMP DIAG: confirm what shape qwen3.6-flash returns and whether
-        # parent_metadata reached this branch.
-        logger.warning(
-            "ocr-record-diag: usage=%r response_metadata_keys=%r parent_meta_keys=%r",
-            usage,
-            list((getattr(response, "response_metadata", {}) or {}).keys()),
-            list(parent_metadata.keys()),
-        )
         session_id = parent_metadata.get("session_id") or parent_metadata.get("thread_id")
         turn_id = parent_metadata.get("turn_id")
         input_tokens = int(usage.get("input_tokens") or 0)

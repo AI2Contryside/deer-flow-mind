@@ -71,6 +71,13 @@ models:
     # DashScope OpenAI-compatible endpoint 的关闭方式是 extra_body.enable_thinking=false。
     extra_body:
       enable_thinking: false
+    # When this model is invoked from inside a LangGraph tool node, the
+    # SSE streaming callback propagates down and langchain_openai switches
+    # to streaming. DashScope's stream chunks omit ``usage`` by default,
+    # which breaks token-usage recording for OCR. ``stream_usage=True``
+    # tells langchain_openai to attach ``stream_options.include_usage=true``
+    # so the final aggregated chunk carries the usage block.
+    stream_usage: true
 
   - name: qwen-vl-plus-latest
     display_name: 通义千问 VL-Plus (latest)
