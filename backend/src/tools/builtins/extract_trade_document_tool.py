@@ -299,8 +299,7 @@ def extract_trade_document_tool(
     if file_size > MAX_IMAGE_BYTES:
         return _error_command(
             tool_call_id,
-            f"Image too large ({file_size:,} bytes > {MAX_IMAGE_BYTES:,} byte limit). "
-            f"Please compress or split the image and retry.",
+            f"Image too large ({file_size:,} bytes > {MAX_IMAGE_BYTES:,} byte limit). Please compress or split the image and retry.",
         )
 
     # 3. Read + base64-encode for inline data URL.
@@ -331,9 +330,21 @@ def extract_trade_document_tool(
     # thinking mode anyway and the flag would noop, but we set it
     # explicitly so the factory doesn't try to apply thinking
     # parameters from a future config.yaml typo.
+    #
+    # Forward the parent run's metadata (session_id / turn_id) so the
+    # token-usage recorder can attribute this OCR call to the same
+    # conversational turn as the rest of the agent's work. Without this,
+    # ``model.invoke`` runs with an empty config and the recorder skips
+    # the call.
+    parent_metadata = dict(runtime.config.get("metadata", {})) if runtime is not None else {}
+    invoke_config = {
+        "metadata": parent_metadata,
+        "tags": ["internal:ocr"],
+        "run_name": "extract_trade_document",
+    }
     try:
         model = create_chat_model(name=OCR_MODEL_NAME, thinking_enabled=False)
-        response = model.invoke(messages)
+        response = model.invoke(messages, config=invoke_config)
     except Exception as exc:
         logger.exception("OCR model invocation failed for %s", image_path)
         return _error_command(tool_call_id, f"OCR model call failed: {exc}")
@@ -342,10 +353,7 @@ def extract_trade_document_tool(
     # list of blocks even for text-only replies; flatten to string.
     raw_response = response.content
     if isinstance(raw_response, list):
-        raw_response = "".join(
-            block.get("text", "") if isinstance(block, dict) else str(block)
-            for block in raw_response
-        )
+        raw_response = "".join(block.get("text", "") if isinstance(block, dict) else str(block) for block in raw_response)
     raw_response = str(raw_response).strip()
 
     if not raw_response:
@@ -376,15 +384,8 @@ def extract_trade_document_tool(
             # Annotate the recovery in `notes` so the lead agent knows
             # to warn the user that the response was truncated.
             existing_notes = recovered_dict.get("notes") or ""
-            truncation_note = (
-                "⚠ 模型输出在 token 上限处被截断；已自动抢救可解析部分。"
-                "若关键字段缺失，请拆分图片后重试。"
-            )
-            recovered_dict["notes"] = (
-                f"{existing_notes}\n{truncation_note}".strip()
-                if existing_notes
-                else truncation_note
-            )
+            truncation_note = "⚠ 模型输出在 token 上限处被截断；已自动抢救可解析部分。若关键字段缺失，请拆分图片后重试。"
+            recovered_dict["notes"] = f"{existing_notes}\n{truncation_note}".strip() if existing_notes else truncation_note
             try:
                 recovered_envelope = OcrEnvelope.model_validate(recovered_dict)
             except ValidationError as recovery_exc:
@@ -396,8 +397,7 @@ def extract_trade_document_tool(
         if recovered_envelope is not None:
             logger.info(
                 "OCR truncated; recovered envelope with %d items (raw len=%d, cleaned len=%d)",
-                len((recovered_envelope.structured.items if recovered_envelope.structured else [])
-                    if hasattr(recovered_envelope.structured, "items") else []),
+                len((recovered_envelope.structured.items if recovered_envelope.structured else []) if hasattr(recovered_envelope.structured, "items") else []),
                 len(raw_response),
                 len(cleaned),
             )
@@ -509,8 +509,4 @@ def _format_summary(envelope: OcrEnvelope, output_virtual_path: str) -> str:
             bullets.append(f"商品行数={len(items)}")
     bullets_text = ("，" + "，".join(bullets)) if bullets else ""
     notes = f"\n备注：{envelope.notes}" if envelope.notes else ""
-    return (
-        f"已识别 {doc_type}（置信度 {pct}%{bullets_text}）。"
-        f"完整 JSON 已写到 {output_virtual_path}，已自动推送给用户的 Canvas 卡片。"
-        f"{notes}"
-    )
+    return f"已识别 {doc_type}（置信度 {pct}%{bullets_text}）。完整 JSON 已写到 {output_virtual_path}，已自动推送给用户的 Canvas 卡片。{notes}"

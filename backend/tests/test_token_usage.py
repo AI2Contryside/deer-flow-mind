@@ -281,3 +281,112 @@ def test_factory_attaches_recorder_callback(monkeypatch: pytest.MonkeyPatch) -> 
     # Identity-by-class-name to survive sys.modules churn from other tests
     # in the suite that re-import storage modules.
     assert any(type(cb).__name__ == "TokenUsageRecorder" for cb in instance.callbacks), "TokenUsageRecorder should be attached to every model created by create_chat_model"
+
+
+# ---------------------------------------------------------------------------
+# Direct-invoke call sites must forward run metadata
+# ---------------------------------------------------------------------------
+
+
+def test_ocr_tool_forwards_run_metadata_to_invoke(monkeypatch: pytest.MonkeyPatch) -> None:
+    """extract_trade_document_tool must thread session_id/turn_id through invoke's config.
+
+    Without this, the TokenUsageRecorder attached at the model level can't
+    correlate the OCR call to the parent run and skips it entirely.
+    """
+    import sys
+    from unittest.mock import MagicMock
+
+    from langchain_core.messages import AIMessage
+
+    # Import the *module* explicitly via sys.modules. Importing by dotted
+    # path returns the StructuredTool re-exported in builtins/__init__.py
+    # because the package attribute and the submodule share a name.
+    import src.tools.builtins.extract_trade_document_tool  # noqa: F401  -- ensure submodule is loaded
+
+    ocr_mod = sys.modules["src.tools.builtins.extract_trade_document_tool"]
+    ocr_tool = ocr_mod.extract_trade_document_tool
+
+    captured_config: dict[str, Any] = {}
+
+    class _StubModel:
+        def invoke(self, _messages: Any, config: Any = None) -> Any:
+            captured_config.update(config or {})
+            # Return a tiny valid OCR JSON envelope so the rest of the tool
+            # pipeline runs to completion without choking on parse errors.
+            return AIMessage(content='{"doc_type": "unknown", "fields": {}, "items": []}')
+
+    monkeypatch.setattr(ocr_mod, "create_chat_model", lambda **_kw: _StubModel())
+    # Bypass virtual-path translation and OSS push so we don't need a real
+    # sandbox or storage backend in this unit test.
+    monkeypatch.setattr(ocr_mod, "replace_virtual_path", lambda p, _td: p)
+    monkeypatch.setattr(ocr_mod, "get_thread_data", lambda _r: {})
+    monkeypatch.setattr(ocr_mod, "_push_to_oss", lambda *_a, **_kw: None)
+    monkeypatch.setattr(ocr_mod, "_build_metadata", lambda *_a, **_kw: {})
+
+    # Stand up a temp image file so the path / size / read checks pass.
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+        f.write(b"\xff\xd8\xff\xe0fake-jpeg")
+        image_path = f.name
+
+    runtime = MagicMock()
+    runtime.config = {"metadata": {"session_id": "thread-X", "turn_id": "turn-9"}}
+    runtime.state = {"sandbox": None, "thread_data": {}}
+
+    # The ``@tool`` decorator wraps the function; ``.func`` exposes the raw callable.
+    ocr_tool.func(
+        runtime=runtime,
+        image_path=image_path,
+        tool_call_id="tc-test",
+    )
+
+    metadata = captured_config.get("metadata") or {}
+    assert metadata.get("session_id") == "thread-X"
+    assert metadata.get("turn_id") == "turn-9"
+
+
+def test_title_middleware_merges_run_metadata_into_invoke_config() -> None:
+    """TitleMiddleware._generate_title must merge parent run's session_id/turn_id
+    into the invoke config so the recorder attributes the title call to the turn.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from src.agents.middlewares.title_middleware import TitleMiddleware
+
+    middleware = TitleMiddleware()
+    fake_model = MagicMock()
+    fake_model.ainvoke = AsyncMock(return_value=MagicMock(content="标题"))
+
+    import src.agents.middlewares.title_middleware as title_mod
+
+    original_create = title_mod.create_chat_model
+    title_mod.create_chat_model = lambda **_kw: fake_model
+    try:
+        runtime = MagicMock()
+        runtime.config = {"metadata": {"session_id": "thread-Y", "turn_id": "turn-42"}}
+
+        state = {
+            "messages": [
+                HumanMessage(content="hello"),
+                AIMessage(content="hi"),
+            ]
+        }
+        asyncio.run(middleware._generate_title(state, runtime))
+
+        _, kwargs = fake_model.ainvoke.await_args
+        run_config = kwargs.get("config") or {}
+        metadata = run_config.get("metadata") or {}
+        assert metadata.get("session_id") == "thread-Y"
+        assert metadata.get("turn_id") == "turn-42"
+        # Existing internal_invocation marker must still be present so the
+        # gateway/FE filter for hiding title prompts in the chat stream
+        # continues to work.
+        assert metadata.get("internal_invocation") == "title"
+        assert "internal:title" in run_config.get("tags", [])
+    finally:
+        title_mod.create_chat_model = original_create

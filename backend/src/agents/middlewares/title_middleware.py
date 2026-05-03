@@ -43,7 +43,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         # Generate title after first complete exchange
         return len(user_messages) == 1 and len(assistant_messages) >= 1
 
-    async def _generate_title(self, state: TitleMiddlewareState) -> str:
+    async def _generate_title(self, state: TitleMiddlewareState, runtime: Runtime | None = None) -> str:
         """Generate a concise title based on the conversation."""
         config = get_title_config()
         messages = state.get("messages", [])
@@ -71,9 +71,14 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         # into the conversation as a final assistant bubble (regression seen
         # on first-round chats: a "Generate a concise title…" reply landed
         # right after the real answer).
+        #
+        # Merge in the parent run's session_id / turn_id so the
+        # token-usage recorder attributes this call to the same
+        # conversational turn as the rest of the agent's work.
+        parent_metadata = dict(runtime.config.get("metadata", {})) if runtime is not None else {}
         title_run_config = {
             "tags": ["internal:title"],
-            "metadata": {"internal_invocation": "title"},
+            "metadata": {**parent_metadata, "internal_invocation": "title"},
             "run_name": "TitleMiddleware.generate",
         }
         try:
@@ -95,7 +100,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
     async def aafter_model(self, state: TitleMiddlewareState, runtime: Runtime) -> dict | None:
         """Generate and set thread title after the first agent response."""
         if self._should_generate_title(state):
-            title = await self._generate_title(state)
+            title = await self._generate_title(state, runtime)
             print(f"Generated thread title: {title}")
 
             # Store title in state (will be persisted by checkpointer if configured)
