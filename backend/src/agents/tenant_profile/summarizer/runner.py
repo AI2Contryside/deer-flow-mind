@@ -82,7 +82,15 @@ def run_summarize(
 
     try:
         inputs = build_summarize_input(tenant_id, user_email=user_email, now=now)
-        raw = (llm or _default_llm)(prompt_module.SYSTEM_PROMPT, _render_user_prompt(inputs))
+        # Bind tenant_id into the default LLM via partial so the
+        # token-usage recorder can attribute this background call to a
+        # synthetic ``bg:profile:<tenant>:…`` turn. Custom ``llm`` injections
+        # (used by tests / fakes) bypass this — they don't talk to a real
+        # provider, so there's nothing to record.
+        from functools import partial as _partial
+
+        llm_fn = llm if llm is not None else _partial(_default_llm, tenant_id=tenant_id)
+        raw = llm_fn(prompt_module.SYSTEM_PROMPT, _render_user_prompt(inputs))
         profile = _parse_and_validate(raw, inputs)
     except SummarizeError as exc:
         trigger_module.mark_summarize_finished(tenant_id, success=False, error=str(exc), now=now)
@@ -438,16 +446,20 @@ def _collect_strings(node: Any, bucket: set[str]) -> None:
             _collect_strings(v, bucket)
 
 
-def _default_llm(system_prompt: str, user_prompt: str) -> str:
+def _default_llm(system_prompt: str, user_prompt: str, *, tenant_id: str | None = None) -> str:
     """Production LLM invocation. Imported lazily so test paths don't need
     the langchain/anthropic stack on hand."""
     from langchain_core.messages import HumanMessage, SystemMessage
 
     from src.models import create_chat_model
+    from src.storage.token_usage import background_invoke_config
 
     cfg = get_tenant_profile_config().summarizer.model
     chat = create_chat_model(name=cfg.model, thinking_enabled=cfg.thinking_enabled)
-    response = chat.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+    response = chat.invoke(
+        [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)],
+        config=background_invoke_config("profile", tenant_id or "unknown"),
+    )
     content = getattr(response, "content", None)
     if isinstance(content, str):
         return content

@@ -18,6 +18,7 @@ from src.agents.memory.storage import (
 from src.config.memory_config import get_memory_config
 from src.config.paths import get_paths
 from src.models import create_chat_model
+from src.storage.token_usage import background_invoke_config
 
 
 def _get_memory_file_path(agent_name: str | None = None) -> Path:
@@ -270,9 +271,11 @@ class MemoryUpdater:
                 conversation=conversation_text,
             )
 
-            # Call LLM
+            # Call LLM. Tag this background invocation with a synthetic
+            # turn_id so the token-usage recorder can persist a row even
+            # though no user turn triggered the call directly.
             model = self._get_model()
-            response = model.invoke(prompt)
+            response = model.invoke(prompt, config=background_invoke_config("memory", thread_id or "unknown"))
             response_text = str(response.content).strip()
 
             # Parse response
@@ -454,7 +457,7 @@ class TenantMemoryUpdater:
             )
 
             model = self._get_model()
-            response = model.invoke(prompt)
+            response = model.invoke(prompt, config=background_invoke_config("memory", tenant_id))
             response_text = str(response.content).strip()
 
             if response_text.startswith("```"):

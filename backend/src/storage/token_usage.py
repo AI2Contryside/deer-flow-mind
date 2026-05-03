@@ -27,9 +27,42 @@ import logging
 import os
 import queue
 import threading
+import time
+import uuid
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def background_invoke_config(source: str, key: str) -> dict[str, Any]:
+    """Build a RunnableConfig for an LLM call that is NOT part of a user turn.
+
+    Background activity (memory updates, tenant-profile summarization,
+    suggestion generation) cannot share a real ``turn_id`` because no
+    user message triggered it. We synthesize one of the form
+    ``bg:{source}:{key}:{ts}-{rand}`` so the recorder can write a row
+    without violating the ``NOT NULL`` constraint, and downstream queries
+    can filter background activity in or out via the ``bg:`` prefix.
+
+    The ``key`` is the natural correlation handle for the source
+    (``thread_id`` for memory / suggestions, ``tenant_id`` for profile).
+    The trailing timestamp + random suffix keeps the row distinct per
+    invocation — without it, two consecutive memory updates on the same
+    thread would UPSERT into one row and we'd lose call-count fidelity.
+    """
+    safe_source = source or "unknown"
+    safe_key = key or "unknown"
+    suffix = f"{int(time.time())}-{uuid.uuid4().hex[:6]}"
+    return {
+        "metadata": {
+            "session_id": safe_key,
+            "turn_id": f"bg:{safe_source}:{safe_key}:{suffix}",
+        },
+        "tags": [f"internal:{safe_source}"],
+        "run_name": f"bg:{safe_source}",
+    }
+
 
 # ---------------------------------------------------------------------------
 # Configuration

@@ -120,8 +120,10 @@ async def generate_suggestions(thread_id: str, request: SuggestionsRequest) -> S
     )
 
     try:
+        from src.storage.token_usage import background_invoke_config
+
         model = create_chat_model(name=request.model_name, thinking_enabled=False)
-        response = model.invoke(prompt)
+        response = model.invoke(prompt, config=background_invoke_config("suggest", thread_id))
         raw = _extract_response_text(response.content)
         suggestions = _parse_json_string_list(raw) or []
         cleaned = [s.replace("\n", " ").strip() for s in suggestions if s.strip()]

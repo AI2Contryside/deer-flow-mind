@@ -347,6 +347,60 @@ def test_ocr_tool_forwards_run_metadata_to_invoke(monkeypatch: pytest.MonkeyPatc
     assert metadata.get("turn_id") == "turn-9"
 
 
+# ---------------------------------------------------------------------------
+# Background-call helper + wiring
+# ---------------------------------------------------------------------------
+
+
+def test_background_invoke_config_format() -> None:
+    """Synthetic turn_id must be deterministic in shape: bg:{source}:{key}:..."""
+    from src.storage.token_usage import background_invoke_config
+
+    cfg = background_invoke_config("memory", "thread-123")
+    metadata = cfg["metadata"]
+    assert metadata["session_id"] == "thread-123"
+    turn_id = metadata["turn_id"]
+    assert turn_id.startswith("bg:memory:thread-123:")
+    # Two consecutive calls produce distinct turn_ids so an UPSERT
+    # doesn't collapse separate background runs into one row.
+    cfg2 = background_invoke_config("memory", "thread-123")
+    assert cfg2["metadata"]["turn_id"] != turn_id
+    # The empty-source / empty-key guard rails: no NULLs leak into the row.
+    cfg3 = background_invoke_config("", "")
+    assert cfg3["metadata"]["session_id"] == "unknown"
+    assert cfg3["metadata"]["turn_id"].startswith("bg:unknown:unknown:")
+
+
+def test_memory_updater_passes_background_config_to_invoke(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MemoryUpdater.update_memory must pass a bg:memory:* config to invoke."""
+    from unittest.mock import MagicMock
+
+    import src.agents.memory.updater as updater_mod
+
+    # Force the config to be enabled so update_memory actually runs the LLM.
+    monkeypatch.setattr(updater_mod, "get_memory_config", lambda: MagicMock(enabled=True, fact_confidence_threshold=0.7, max_facts=100, model_name=None))
+    monkeypatch.setattr(updater_mod, "get_memory_data", lambda _agent: {"user": {}, "history": {}, "facts": []})
+    monkeypatch.setattr(updater_mod, "format_conversation_for_update", lambda _msgs: "fake conversation")
+    monkeypatch.setattr(updater_mod, "_save_memory_to_file", lambda *_a, **_kw: True)
+
+    captured: dict[str, Any] = {}
+
+    class _StubModel:
+        def invoke(self, _prompt: Any, config: Any = None) -> Any:
+            captured["config"] = config
+            return MagicMock(content='{"user": {}, "history": {}, "newFacts": [], "factsToRemove": []}')
+
+    updater = updater_mod.MemoryUpdater()
+    monkeypatch.setattr(updater, "_get_model", lambda: _StubModel())
+
+    updater.update_memory(messages=[MagicMock()], thread_id="thread-mem")
+
+    assert captured.get("config") is not None
+    metadata = captured["config"].get("metadata") or {}
+    assert metadata.get("session_id") == "thread-mem"
+    assert metadata.get("turn_id", "").startswith("bg:memory:thread-mem:")
+
+
 def test_title_middleware_merges_run_metadata_into_invoke_config() -> None:
     """TitleMiddleware._generate_title must merge parent run's session_id/turn_id
     into the invoke config so the recorder attributes the title call to the turn.
