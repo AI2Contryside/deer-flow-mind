@@ -403,12 +403,14 @@ def test_memory_updater_passes_background_config_to_invoke(monkeypatch: pytest.M
 
 def test_title_middleware_merges_run_metadata_into_invoke_config() -> None:
     """TitleMiddleware._generate_title must merge parent run's session_id/turn_id
-    into the invoke config so the recorder attributes the title call to the turn.
+    (read from LangChain's active-runnable-config contextvar) into the invoke config
+    so the recorder attributes the title call to the turn.
     """
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
     from langchain_core.messages import AIMessage, HumanMessage
+    from langchain_core.runnables.config import var_child_runnable_config
 
     from src.agents.middlewares.title_middleware import TitleMiddleware
 
@@ -420,17 +422,18 @@ def test_title_middleware_merges_run_metadata_into_invoke_config() -> None:
 
     original_create = title_mod.create_chat_model
     title_mod.create_chat_model = lambda **_kw: fake_model
-    try:
-        runtime = MagicMock()
-        runtime.config = {"metadata": {"session_id": "thread-Y", "turn_id": "turn-42"}}
 
+    # Simulate LangGraph having populated the active-runnable-config
+    # contextvar with our run's metadata before the middleware fires.
+    token = var_child_runnable_config.set({"metadata": {"session_id": "thread-Y", "turn_id": "turn-42"}})
+    try:
         state = {
             "messages": [
                 HumanMessage(content="hello"),
                 AIMessage(content="hi"),
             ]
         }
-        asyncio.run(middleware._generate_title(state, runtime))
+        asyncio.run(middleware._generate_title(state))
 
         _, kwargs = fake_model.ainvoke.await_args
         run_config = kwargs.get("config") or {}
@@ -444,3 +447,4 @@ def test_title_middleware_merges_run_metadata_into_invoke_config() -> None:
         assert "internal:title" in run_config.get("tags", [])
     finally:
         title_mod.create_chat_model = original_create
+        var_child_runnable_config.reset(token)

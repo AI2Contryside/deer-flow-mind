@@ -75,7 +75,20 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         # Merge in the parent run's session_id / turn_id so the
         # token-usage recorder attributes this call to the same
         # conversational turn as the rest of the agent's work.
-        parent_metadata = dict(runtime.config.get("metadata", {})) if runtime is not None else {}
+        # ``runtime.config`` does NOT exist on ``langgraph.runtime.Runtime``
+        # (only ``ToolRuntime`` has it). Pull from LangChain's active
+        # runnable-config contextvar instead, which the agent run has
+        # populated by the time this middleware fires.
+        parent_metadata: dict = {}
+        try:
+            from langchain_core.runnables.config import var_child_runnable_config
+
+            active_config = var_child_runnable_config.get()
+            if active_config is not None:
+                parent_metadata = dict(active_config.get("metadata") or {})
+        except Exception:  # pragma: no cover - defensive
+            parent_metadata = {}
+
         title_run_config = {
             "tags": ["internal:title"],
             "metadata": {**parent_metadata, "internal_invocation": "title"},
