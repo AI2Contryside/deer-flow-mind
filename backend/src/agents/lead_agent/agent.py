@@ -369,6 +369,17 @@ def make_lead_agent(config: RunnableConfig):
     if "metadata" not in config:
         config["metadata"] = {}
 
+    # ``turn_id`` correlates every LLM call (lead agent + middlewares +
+    # subagents) belonging to a single user message. Generated fresh per
+    # ``make_lead_agent`` call (= per LangGraph run); propagated to subagents
+    # via ``parent_context`` in ``task_tool``. ``session_id`` is the LangGraph
+    # thread, which is the natural conversation key. Both flow into the
+    # ``TokenUsageRecorder`` callback attached in the model factory.
+    import uuid as _uuid
+
+    session_id = str(cfg.get("thread_id") or cfg.get("session_id") or "")
+    turn_id = config["metadata"].get("turn_id") or _uuid.uuid4().hex
+
     config["metadata"].update(
         {
             "agent_name": agent_name or "default",
@@ -377,6 +388,8 @@ def make_lead_agent(config: RunnableConfig):
             "reasoning_effort": reasoning_effort,
             "is_plan_mode": is_plan_mode,
             "subagent_enabled": subagent_enabled,
+            "session_id": session_id,
+            "turn_id": turn_id,
         }
     )
 

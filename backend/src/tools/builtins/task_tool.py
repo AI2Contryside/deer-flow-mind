@@ -125,6 +125,15 @@ def task_tool(
         # Get or generate trace_id for distributed tracing
         trace_id = metadata.get("trace_id") or str(uuid.uuid4())[:8]
 
+        # Token-usage correlation: forward the lead agent's turn_id /
+        # session_id so every LLM call inside the subagent (which runs in
+        # its own LangGraph run with a fresh metadata dict) attributes
+        # back to the same conversational turn.
+        if metadata.get("turn_id"):
+            parent_context["_turn_id"] = metadata["turn_id"]
+        if metadata.get("session_id"):
+            parent_context["_session_id"] = metadata["session_id"]
+
     # Get available tools (excluding task tool to prevent nesting)
     # Lazy import to avoid circular dependency
     from src.tools import get_available_tools

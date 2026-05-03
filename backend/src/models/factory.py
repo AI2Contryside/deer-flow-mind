@@ -76,4 +76,17 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
             logger.debug(f"LangSmith tracing attached to model '{name}' (project='{tracing_config.project}')")
         except Exception as e:
             logger.warning(f"Failed to attach LangSmith tracing to model '{name}': {e}")
+
+    # Token-usage recorder: attached to every chat model so lead agent,
+    # subagents, summarization, memory updater, title middleware, and the
+    # tenant_profile summarizer all flow through the same chokepoint. The
+    # handler degrades to a no-op when ``TOKEN_USAGE_DSN`` is unset.
+    try:
+        from src.storage.token_usage_callback import TokenUsageRecorder
+
+        existing_callbacks = model_instance.callbacks or []
+        model_instance.callbacks = [*existing_callbacks, TokenUsageRecorder()]
+    except Exception as e:
+        logger.warning(f"Failed to attach token-usage recorder to model '{name}': {e}")
+
     return model_instance

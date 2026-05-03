@@ -287,6 +287,19 @@ class SubagentExecutor:
                 run_config["configurable"] = {"thread_id": self.thread_id}
                 context["thread_id"] = self.thread_id
 
+            # Token-usage correlation: stamp the parent's turn_id /
+            # session_id into this subagent's metadata so its LLM calls
+            # attribute back to the same conversational turn. The values
+            # arrive via ``parent_context`` (set in ``task_tool``).
+            parent_turn_id = self.parent_context.get("_turn_id")
+            parent_session_id = self.parent_context.get("_session_id") or self.thread_id
+            if parent_turn_id:
+                run_config["metadata"] = {
+                    **(run_config.get("metadata") or {}),
+                    "turn_id": parent_turn_id,
+                    "session_id": parent_session_id or "",
+                }
+
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} starting async execution with max_turns={self.config.max_turns}")
 
             # Use stream instead of invoke to get real-time updates
