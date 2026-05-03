@@ -42,25 +42,27 @@ models:
   #
   # Two distinct models, two different invocation paths on purpose:
   #
-  #   * qwen-vl-ocr-latest is the OCR-specialised, single-turn checkpoint
-  #     (~5x cheaper output than qwen-vl-plus, ~10x cheaper than -max).
-  #     It rejects system messages, multi-turn history, and tool-call
-  #     sequences — so it can NOT be wired into a LangChain
-  #     `create_agent` flow. Instead we call it through the
-  #     `extract_trade_document` builtin tool, which constructs a single
-  #     {role: user, content: [image_url, text]} message and invokes the
-  #     model directly. One LLM call per document; lead agent never
-  #     spins up a subagent. See
+  #   * qwen-vl-max-latest powers the `extract_trade_document` builtin
+  #     tool. We tried qwen-vl-ocr-latest first — cheaper per token —
+  #     but its 4096-token output ceiling truncates real-world trade
+  #     documents (a 321-line sales order produced ~11k tokens of
+  #     JSON, hit the cap, and the response came back with an
+  #     unclosed array → the parser fell back to "unknown" and the
+  #     user saw nothing). qwen-vl-max-latest's 8192-token ceiling
+  #     fits ~100 line items plus headers, and OCR fidelity matches
+  #     -ocr on dense Chinese trade documents in our own tests.
+  #     Single tool call, one LLM round-trip, no agent loop. See
   #     src/tools/builtins/extract_trade_document_tool.py.
   #
-  #   * qwen-vl-plus-latest is the general vision-QA model used by the
-  #     `vision-analyst` subagent for product photos / factory shots /
-  #     screenshots — situations that benefit from a multi-turn
-  #     view_image agent loop.
-  - name: qwen-vl-ocr-latest
-    display_name: 通义千问 VL-OCR (latest, single-turn)
+  #   * qwen-vl-plus-latest is the lighter general vision-QA model
+  #     used by the `vision-analyst` subagent for product photos /
+  #     factory shots / screenshots — situations that benefit from a
+  #     multi-turn view_image agent loop and don't need the bigger
+  #     model.
+  - name: qwen-vl-max-latest
+    display_name: 通义千问 VL-Max (latest)
     use: langchain_openai:ChatOpenAI
-    model: qwen-vl-ocr-latest
+    model: qwen-vl-max-latest
     api_key: $DASHSCOPE_API_KEY
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     max_tokens: 8192

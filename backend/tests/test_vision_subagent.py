@@ -140,11 +140,13 @@ def test_qwen_vl_models_loadable(loaded_app_config) -> None:
     """config.yaml exposes both Qwen-VL variants with supports_vision=True.
 
     Two distinct models, two different invocation paths:
-    - ``qwen-vl-ocr-latest`` is consumed by the
+    - ``qwen-vl-max-latest`` is consumed by the
       ``extract_trade_document`` builtin tool via direct
-      ``model.invoke([HumanMessage(image+text)])`` — the model rejects
-      the multi-turn / system-prompt shape a subagent produces, so it
-      cannot be a subagent's model.
+      ``model.invoke([HumanMessage(image+text)])``. We tried
+      ``qwen-vl-ocr-latest`` first (cheaper) but its 4096-token
+      output cap truncated dense trade documents (321-row sales
+      order produced ~11k tokens of JSON). qwen-vl-max-latest's
+      8192-token cap fits ~100 line items and OCR fidelity matches.
     - ``qwen-vl-plus-latest`` is the model for the ``vision-analyst``
       subagent (multi-turn agent loop is fine here).
 
@@ -155,7 +157,7 @@ def test_qwen_vl_models_loadable(loaded_app_config) -> None:
     from src.config import get_app_config
 
     app_cfg = get_app_config()
-    for name in ("qwen-vl-ocr-latest", "qwen-vl-plus-latest"):
+    for name in ("qwen-vl-max-latest", "qwen-vl-plus-latest"):
         cfg = app_cfg.get_model_config(name)
         assert cfg is not None, f"{name} missing from config.yaml models[]"
         assert cfg.supports_vision is True

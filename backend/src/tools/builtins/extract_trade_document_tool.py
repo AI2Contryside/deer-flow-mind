@@ -55,7 +55,7 @@ from src.tools.builtins.present_file_tool import _build_metadata, _push_to_oss
 
 logger = logging.getLogger(__name__)
 
-OCR_MODEL_NAME = "qwen-vl-ocr-latest"
+OCR_MODEL_NAME = "qwen-vl-max-latest"
 
 # DashScope vision endpoint caps a single image at ~10 MB raw bytes;
 # base64 encoding adds ~33% so the wire payload stays under the upstream
@@ -63,10 +63,17 @@ OCR_MODEL_NAME = "qwen-vl-ocr-latest"
 # of waiting for an opaque 413 / 400 from the provider.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
-# qwen-vl-ocr accepts the same set of formats as the other Qwen-VL
+# qwen-vl-max accepts the same set of formats as the other Qwen-VL
 # models. We deliberately limit the surface to keep error reporting
 # tight — uncommon formats can be re-encoded by the user.
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+# Output cap. Even qwen-vl-max-latest's 8192-token ceiling can't fit
+# arbitrary-length item tables (a 321-row sales order would need
+# ~11k tokens of JSON). The prompt instructs the model to clamp items
+# to the first 100 rows and report the full count in `notes`; this
+# constant exists so the prompt and the post-validation never drift.
+MAX_LINE_ITEMS_PER_CALL = 100
 
 
 def _build_extract_prompt() -> str:
@@ -75,8 +82,17 @@ def _build_extract_prompt() -> str:
     Kept in a helper (not a module-level constant) so the schema block
     is rebuilt at import time but the wrapping prose stays inline and
     grep-able. The model sees this prompt PLUS the image as a single
-    user message — there is no system prompt, intentionally, because
-    qwen-vl-ocr's single-turn protocol does not accept one.
+    user message — there is no system prompt, intentionally, to keep
+    one shape across providers.
+
+    Token budget guidance is non-trivial here. qwen-vl-max-latest caps
+    output at 8192 tokens. A naïve "extract everything" prompt will
+    blow past that on dense documents (a 321-row sales order produced
+    ~11k tokens of JSON in production and the response was truncated
+    mid-array). So the prompt deliberately constrains the two fields
+    that grow without bound: ``raw_text`` (full transcription) and
+    ``structured.items`` (line-item table). Headers and totals are
+    always small — those stay unconstrained.
     """
     return f"""请对这张外贸单据图片做严格 OCR 与字段抽取，**只输出 JSON**，不要解释、不要 markdown 代码块包裹。
 
@@ -84,19 +100,148 @@ def _build_extract_prompt() -> str:
 
 {OCR_SCHEMA_PROMPT_BLOCK}
 
-如果不是外贸单据或图片不清晰，``detected_doc_type`` 填 ``"unknown"``、``confidence`` 填 0~0.3、``raw_text`` 填看到的所有文字、``structured`` 填 null、``notes`` 写一句简短说明。"""
+**输出长度约束（必须遵守，否则 JSON 会被截断）：**
+
+1. ``raw_text`` 仅包含**单据头部信息**：标题、单号、日期、客户名/供应商名、地址、说明、合同条款等元数据。
+   **不要**逐行抄写商品明细表格——明细已经放在 ``structured.items`` 里。``raw_text`` 控制在 1000 字以内。
+
+2. ``structured.items`` 最多输出 **{MAX_LINE_ITEMS_PER_CALL}** 行。如果实际行数更多：
+   - 抽取**前 {MAX_LINE_ITEMS_PER_CALL} 行**（按图上从上到下顺序）
+   - 在 ``notes`` 中写明："明细共 N 行，已抽取前 {MAX_LINE_ITEMS_PER_CALL} 行；如需完整数据请拆分图片或导出 Excel"
+   - 优先保证已抽取行的字段准确，**不要**为了塞下更多行而省略字段
+
+3. 头部字段（invoice_no, total_amount, currency 等）**始终完整输出**，不受上面约束。
+
+如果不是外贸单据或图片不清晰，``detected_doc_type`` 填 ``"unknown"``、``confidence`` 填 0~0.3、``raw_text`` 填看到的所有文字（同样 ≤1000 字）、``structured`` 填 null、``notes`` 写一句简短说明。"""
 
 
 def _strip_code_fence(text: str) -> str:
     """Remove ```json ... ``` fences if the model emits them despite
-    being told not to. Tolerant: also handles bare ``` fences and
-    leading/trailing whitespace."""
+    being told not to. Tolerant: also handles bare ``` fences,
+    truncated trailing fences (the closing ``` may have been cut off
+    by max_tokens), and leading/trailing whitespace."""
     cleaned = text.strip()
     fence_pattern = re.compile(r"^```(?:json|JSON)?\s*\n?(.*?)\n?```$", re.DOTALL)
     match = fence_pattern.match(cleaned)
     if match:
         return match.group(1).strip()
-    return cleaned
+    # Truncation can leave us with a leading ```json but no closing fence.
+    # Strip the opening fence so we can still try to parse the body.
+    if cleaned.startswith("```"):
+        first_newline = cleaned.find("\n")
+        if first_newline >= 0:
+            cleaned = cleaned[first_newline + 1 :]
+    return cleaned.strip()
+
+
+def _try_recover_truncated_json(raw: str) -> dict | None:
+    """Best-effort recovery of a truncated JSON object.
+
+    qwen-vl-max-latest caps output at ~8192 tokens. A response cut
+    off mid-array (the ``items`` field is the usual culprit) leaves
+    us with valid JSON up to some last comma followed by an
+    incomplete item, then no closing brackets. Falling back to
+    ``unknown_ocr.json`` in that case throws away everything the
+    model DID extract — the doc_type, the headers, and the first
+    50-90 valid items.
+
+    Strategy:
+      1. Walk backwards to find the last complete value boundary
+         (a ``}`` or ``]`` or a primitive followed by either
+         whitespace-and-end or a comma).
+      2. Trim everything after that boundary.
+      3. Close any open ``[`` / ``{`` with their counterparts.
+      4. Try ``json.loads`` on the result.
+
+    Returns the parsed dict on success, ``None`` if recovery isn't
+    feasible (the response was so badly mangled that even the
+    headers are unreachable).
+
+    NOT a general-purpose JSON repair tool — only handles the
+    specific "truncated by token cap" failure mode. For schema
+    violations (wrong types, missing required fields) the caller
+    should still fall back to the unknown envelope.
+    """
+    text = raw.strip()
+    if not text or not text.startswith("{"):
+        return None
+
+    # Find the last position that's a complete value boundary.
+    # We scan the string tracking string-escape state and bracket
+    # depth, then remember the index right after the last ``}``,
+    # ``]`` or string-end that occurs at depth ≥1 inside the items
+    # array (depth ≥2 from root). Simpler heuristic that works in
+    # practice: cut at the last ``},`` or ``],`` we see.
+    last_safe = -1
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        # Outside strings, any ``},`` or ``],`` ends a complete sibling
+        # value — we can safely truncate just BEFORE the comma.
+        if ch == "," and i > 0 and text[i - 1] in "}]":
+            last_safe = i  # cut here, dropping the comma onward
+        # Also handle the case where we're at the end of the last
+        # element of an array/object (no trailing comma): the closing
+        # bracket itself is a safe boundary, but only if it's
+        # followed by another ``]`` / ``}`` / EOF — meaning the
+        # higher-level structure also closed cleanly. We keep this
+        # simple by sticking with the comma rule.
+
+    if last_safe < 0:
+        return None
+
+    truncated = text[:last_safe]
+    # Now balance brackets/braces.
+    depth_brace = 0
+    depth_bracket = 0
+    in_string = False
+    escape = False
+    for ch in truncated:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth_brace += 1
+        elif ch == "}":
+            depth_brace -= 1
+        elif ch == "[":
+            depth_bracket += 1
+        elif ch == "]":
+            depth_bracket -= 1
+
+    if depth_brace < 0 or depth_bracket < 0:
+        return None  # something is fundamentally wrong, give up
+
+    # Close arrays first (they're nested inside objects), then objects.
+    closing = "]" * depth_bracket + "}" * depth_brace
+    candidate = truncated + closing
+
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
 
 
 def _error_command(tool_call_id: str, msg: str) -> Command:
@@ -206,28 +351,70 @@ def extract_trade_document_tool(
     if not raw_response:
         return _error_command(tool_call_id, "OCR model returned empty response")
 
-    # 7. Parse JSON. Tolerate ```json fences even though the prompt
-    # forbids them — vision models occasionally relapse, and falling
-    # back to "unknown" envelope when JSON is genuinely malformed
-    # keeps the user experience smooth.
+    # 7. Parse JSON. Three-tier strategy:
+    #
+    #   a. Try ``json.loads`` directly (after stripping any ```json
+    #      fences the model emits despite being told not to).
+    #   b. If that fails, attempt ``_try_recover_truncated_json`` to
+    #      salvage a response that was cut off mid-array by the
+    #      output token cap. Real production case: a 321-row sales
+    #      order produced ~11k tokens of JSON, qwen-vl-max stopped at
+    #      8192, the response came back with an unclosed ``items``
+    #      array, and we'd otherwise throw away the doc_type, all
+    #      headers, and the ~80 valid items the model HAD extracted.
+    #   c. Only if recovery also fails do we fall back to the
+    #      ``unknown`` envelope so the user at least sees raw_text.
     cleaned = _strip_code_fence(raw_response)
     envelope: OcrEnvelope
     try:
         envelope_dict = json.loads(cleaned)
         envelope = OcrEnvelope.model_validate(envelope_dict)
     except (json.JSONDecodeError, ValidationError) as exc:
-        logger.warning(
-            "OCR returned non-conforming JSON (%s); falling back to unknown envelope. raw=%r",
-            exc,
-            raw_response[:500],
-        )
-        envelope = OcrEnvelope(
-            detected_doc_type="unknown",
-            confidence=0.0,
-            raw_text=raw_response,
-            structured=None,
-            notes=f"模型输出不是合规 JSON：{type(exc).__name__}",
-        )
+        recovered_dict = _try_recover_truncated_json(cleaned)
+        recovered_envelope: OcrEnvelope | None = None
+        if recovered_dict is not None:
+            # Annotate the recovery in `notes` so the lead agent knows
+            # to warn the user that the response was truncated.
+            existing_notes = recovered_dict.get("notes") or ""
+            truncation_note = (
+                "⚠ 模型输出在 token 上限处被截断；已自动抢救可解析部分。"
+                "若关键字段缺失，请拆分图片后重试。"
+            )
+            recovered_dict["notes"] = (
+                f"{existing_notes}\n{truncation_note}".strip()
+                if existing_notes
+                else truncation_note
+            )
+            try:
+                recovered_envelope = OcrEnvelope.model_validate(recovered_dict)
+            except ValidationError as recovery_exc:
+                logger.warning(
+                    "Truncated-JSON recovery parsed but failed validation (%s)",
+                    recovery_exc,
+                )
+
+        if recovered_envelope is not None:
+            logger.info(
+                "OCR truncated; recovered envelope with %d items (raw len=%d, cleaned len=%d)",
+                len((recovered_envelope.structured.items if recovered_envelope.structured else [])
+                    if hasattr(recovered_envelope.structured, "items") else []),
+                len(raw_response),
+                len(cleaned),
+            )
+            envelope = recovered_envelope
+        else:
+            logger.warning(
+                "OCR returned non-conforming JSON (%s); recovery failed; falling back to unknown envelope. raw=%r",
+                exc,
+                raw_response[:500],
+            )
+            envelope = OcrEnvelope(
+                detected_doc_type="unknown",
+                confidence=0.0,
+                raw_text=raw_response,
+                structured=None,
+                notes=f"模型输出不是合规 JSON：{type(exc).__name__}",
+            )
 
     # 8. Write JSON to outputs as a typed artifact. Filename convention
     # ``<doc_type>_ocr.json`` is matched by the frontend

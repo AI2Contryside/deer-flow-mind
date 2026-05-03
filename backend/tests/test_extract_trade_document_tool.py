@@ -57,6 +57,113 @@ def test_strip_code_fence_handles_json_block() -> None:
     assert _strip_code_fence('{"a":1}') == '{"a":1}'
 
 
+def test_strip_code_fence_handles_truncated_opening_fence() -> None:
+    """When max_tokens cuts off the response mid-array, the opening
+    ```json fence is present but the closing ``` never arrives. We
+    should still strip the opener so the body is parseable."""
+    from src.tools.builtins.extract_trade_document_tool import _strip_code_fence
+
+    truncated = '```json\n{"a":1, "items": [{"sku":"A"'
+    out = _strip_code_fence(truncated)
+    # Opener gone, body kept intact for the recovery pass.
+    assert not out.startswith("```")
+    assert out.startswith('{"a":1')
+
+
+def test_recover_truncated_json_salvages_complete_items() -> None:
+    """Real-shape truncation case: header fields complete, items
+    array cut off mid-element. Recovery should drop the partial last
+    item and close the brackets, yielding a valid envelope with the
+    complete items it managed to extract."""
+    from src.tools.builtins.extract_trade_document_tool import _try_recover_truncated_json
+
+    truncated = """{
+        "detected_doc_type": "commercial_invoice",
+        "confidence": 0.95,
+        "raw_text": "headers only",
+        "structured": {
+            "doc_type": "commercial_invoice",
+            "invoice_no": "INV-001",
+            "items": [
+                {"sku": "A", "description": "x", "quantity": 1, "amount": 10.0},
+                {"sku": "B", "description": "y", "quantity": 2, "amount": 20.0},
+                {"sku": "C", "descrip"""
+
+    recovered = _try_recover_truncated_json(truncated)
+    assert recovered is not None
+    assert recovered["detected_doc_type"] == "commercial_invoice"
+    assert recovered["structured"]["invoice_no"] == "INV-001"
+    # Should keep the two complete items, drop the partial third.
+    assert len(recovered["structured"]["items"]) == 2
+    assert recovered["structured"]["items"][0]["sku"] == "A"
+    assert recovered["structured"]["items"][1]["sku"] == "B"
+
+
+def test_recover_truncated_json_returns_none_for_garbage() -> None:
+    """Recovery should give up cleanly (return None) on responses
+    that aren't even close to valid JSON, so the caller can fall
+    back to the unknown envelope without false confidence."""
+    from src.tools.builtins.extract_trade_document_tool import _try_recover_truncated_json
+
+    assert _try_recover_truncated_json("") is None
+    assert _try_recover_truncated_json("not json at all") is None
+    assert _try_recover_truncated_json("[1, 2, 3]") is None  # we only handle objects
+    # No safe boundary at all (no `},` or `],` ever appears)
+    assert _try_recover_truncated_json('{"a": "value missing close') is None
+
+
+def test_recover_truncated_json_handles_strings_with_brackets() -> None:
+    """Bracket counting must respect string boundaries — a ``]`` or
+    ``}`` inside a JSON string isn't a structural close. A naive
+    count would over-close and produce malformed JSON."""
+    from src.tools.builtins.extract_trade_document_tool import _try_recover_truncated_json
+
+    truncated = """{
+        "detected_doc_type": "commercial_invoice",
+        "confidence": 0.5,
+        "raw_text": "weird content with } and ] inside",
+        "structured": {
+            "doc_type": "commercial_invoice",
+            "items": [
+                {"sku": "A", "description": "has } inside"},
+                {"sku": "B"""
+
+    recovered = _try_recover_truncated_json(truncated)
+    assert recovered is not None
+    assert recovered["raw_text"] == "weird content with } and ] inside"
+    assert len(recovered["structured"]["items"]) == 1
+    assert recovered["structured"]["items"][0]["description"] == "has } inside"
+
+
+def test_max_line_items_per_call_constant() -> None:
+    """Lock down the line-item cap so prompt and runtime can't drift.
+    The prompt instructs the model to stop at this many; if we ever
+    raise it without re-evaluating qwen-vl-max's 8192-token output
+    ceiling, dense documents will silently truncate again."""
+    from src.tools.builtins.extract_trade_document_tool import MAX_LINE_ITEMS_PER_CALL
+
+    assert MAX_LINE_ITEMS_PER_CALL == 100
+
+
+def test_extract_prompt_mentions_truncation_constraints() -> None:
+    """The prompt must tell the model about both length constraints
+    (raw_text headers-only, items capped at MAX_LINE_ITEMS_PER_CALL)
+    AND what to do when over the cap (notes report). Without these
+    guidelines a 300-row sales order generates ~11k tokens and gets
+    cut off mid-array."""
+    from src.tools.builtins.extract_trade_document_tool import (
+        MAX_LINE_ITEMS_PER_CALL,
+        _build_extract_prompt,
+    )
+
+    prompt = _build_extract_prompt()
+    assert str(MAX_LINE_ITEMS_PER_CALL) in prompt
+    assert "raw_text" in prompt
+    assert "头部" in prompt
+    assert "notes" in prompt
+    assert "明细" in prompt
+
+
 def test_supported_extensions() -> None:
     from src.tools.builtins.extract_trade_document_tool import SUPPORTED_EXTENSIONS
 
