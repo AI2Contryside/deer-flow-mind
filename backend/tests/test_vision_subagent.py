@@ -154,7 +154,7 @@ def test_qwen_vl_models_loadable(loaded_app_config) -> None:
     from src.config import get_app_config
 
     app_cfg = get_app_config()
-    for name in ("Qwen3.6-Flash", "qwen-vl-plus-latest"):
+    for name in ("qwen3.6-flash", "qwen-vl-plus-latest"):
         cfg = app_cfg.get_model_config(name)
         assert cfg is not None, f"{name} missing from config.yaml models[]"
         assert cfg.supports_vision is True

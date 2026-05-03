@@ -55,7 +55,7 @@ from src.tools.builtins.present_file_tool import _build_metadata, _push_to_oss
 
 logger = logging.getLogger(__name__)
 
-OCR_MODEL_NAME = "Qwen3.6-Flash"
+OCR_MODEL_NAME = "qwen3.6-flash"
 
 # DashScope vision endpoint caps a single image at ~10 MB raw bytes;
 # base64 encoding adds ~33% so the wire payload stays under the upstream

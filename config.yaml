@@ -57,10 +57,10 @@ models:
   #     factory shots / screenshots — situations that benefit from a
   #     multi-turn view_image agent loop and don't need the bigger
   #     model.
-  - name: Qwen3.6-Flash
+  - name: qwen3.6-flash
     display_name: 通义千问 Qwen3.6 Flash
     use: langchain_openai:ChatOpenAI
-    model: Qwen3.6-Flash
+    model: qwen3.6-flash
     api_key: $DASHSCOPE_API_KEY
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     # 模型有 1M 上下文窗口；OCR 场景（密集表格、长字段列表）需要尽量大的输出预算。
