@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import mimetypes
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -23,6 +24,26 @@ DEFAULT_RUN_CONTEXT: dict[str, Any] = {
     "is_plan_mode": False,
     "subagent_enabled": False,
 }
+
+
+_NEXT_STEP_TAG_RE = re.compile(
+    r'<next_step\s+options="[^"]+"(?:\s+primary="[^"]*")?\s*>(.*?)</next_step>',
+    re.DOTALL,
+)
+
+
+def _strip_next_step_tag(text: str) -> str:
+    """Remove ``<next_step>`` wrapper tags but keep the natural-language sentence.
+
+    The lead agent emits proactive suggestions wrapped in
+    ``<next_step options="..." primary="...">人话</next_step>``. Web frontends
+    parse the tag and render an action card; IM channels (Feishu / Slack /
+    Telegram) just need the human-readable inner text — the tag attributes
+    would look like noise in chat. Replace each tag with its inner content.
+    """
+    if not text or "<next_step" not in text:
+        return text
+    return _NEXT_STEP_TAG_RE.sub(lambda m: m.group(1).strip(), text)
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -82,13 +103,13 @@ def _extract_response_text(result: dict | list) -> str:
         if msg_type == "tool" and msg.get("name") == "ask_clarification":
             content = msg.get("content", "")
             if isinstance(content, str) and content:
-                return content
+                return _strip_next_step_tag(content)
 
         # Regular AI message with text content
         if msg_type == "ai":
             content = msg.get("content", "")
             if isinstance(content, str) and content:
-                return content
+                return _strip_next_step_tag(content)
             # content can be a list of content blocks
             if isinstance(content, list):
                 parts = []
@@ -99,7 +120,7 @@ def _extract_response_text(result: dict | list) -> str:
                         parts.append(block)
                 text = "".join(parts)
                 if text:
-                    return text
+                    return _strip_next_step_tag(text)
     return ""
 
 

@@ -2,7 +2,72 @@ from datetime import datetime
 
 from src.agents.concealment import VENDOR_CONCEALMENT_BLOCK
 from src.config.agents_config import load_agent_soul
+from src.config.next_step_config import get_next_step_config
 from src.skills import load_skills
+
+NEXT_STEP_SECTION = """
+<next_step_policy>
+任务交付完成后，是否在最终回复里追加一条主动的 next-step 建议，按下表自检（按顺序，任一否决条件命中即静默）：
+
+**否决条件：**
+1. 上一轮已存在 ``<next_step>`` 标签且本轮用户消息既未接受也未明确拒绝 — 已在「软忽略」状态，本轮不要再追问。
+2. ``<next_step_state>`` 中 ``asked_count`` 已达到 ``budget`` 上限。
+3. ``<next_step_state>`` 中 ``cooldown_remaining > 0``（用户最近被建议得不耐烦了，正在冷却）。
+4. 本轮你只是在解释概念 / 翻译 / 总结 / 回答事实问题（闭环任务，没有自然下游）。
+5. 用户原始诉求里含明确终点词："查一下" / "告诉我" / "帮我看看" / "是什么" / "解释下"。
+
+**候选条件（任一命中且无否决）：**
+1. 本轮产出了 artifact（生成了文件 / 调用了 ``present_files`` / 数据已写入 ERPNext）。
+2. 用户原始诉求含开环动词："解析" / "提取" / "生成" / "计算" / "准备" / "录入" / "导入"。
+
+**如果决定追问：**
+- 一次只问 1 个建议，不要堆叠两条。
+- 必须是可执行动作（"录入到系统"、"发送给客户"），不要空话（"还需要什么帮助" / "请问还有什么问题"）。
+- 追问语句必须用 ``<next_step>`` 标签包裹，前端会剥离标签后渲染成快捷按钮卡片。
+
+**标签格式：**
+
+  <next_step options="录入到系统|导出 CSV" primary="录入到系统">
+  💡 接下来要不要把这 23 笔订单录入到系统里？也可以先导出成 CSV 复核。
+  </next_step>
+
+- ``options`` 用 ``|`` 分隔，最多 2 个候选，每个不超过 12 个字。
+- ``primary`` 是默认推荐（可选）；若提供，必须与 ``options`` 中的某一项完全一致。
+- 标签**必须**放在最终回复的最末尾，不要在中间穿插。
+- 标签**内**的中文文本是给用户看的自然语言；``options`` 属性是给前端解析的精确字符串。两者不必逐字一致。
+- 若用户最近一轮明确**接受**了上一次的建议，请直接执行该动作，**不要**再生成新的 ``<next_step>`` 标签。
+</next_step_policy>
+
+<next_step_catalog>
+完成下列任务后的常见 next-step 候选（按场景对号入座，不是穷举）：
+
+| 完成的任务类型 | 候选建议（按优先级） |
+|---------------|---------------------|
+| 订单 / PO / PI 解析完成 | 录入到系统 \\| 导出 CSV |
+| 客户 / 供应商信息提取完成 | 建立档案 \\| 关联现有客户 |
+| 报价单 / Quotation 生成完成 | 发送给客户 \\| 转为销售订单 |
+| 发票 / Invoice 解析完成 | 录入付款流程 \\| 关联到 SO/PO |
+| 装箱单 / 提单 / B/L 解析完成 | 关联到对应订单 \\| 录入物流状态 |
+| 报关单解析完成 | 关联到订单 \\| 归档 |
+| 邮件 / 合同翻译 | (闭环 — 不追问) |
+| 报表 / 统计生成 | (多数闭环 — 仅在用户主动问"接下来呢"才追问) |
+
+不在表里的场景：自行评估是否符合 ``<next_step_policy>`` 的"开环 + 有自然下游"特征再决定。
+</next_step_catalog>
+"""
+
+
+def _build_next_step_section() -> str:
+    """Return the next-step prompt block when the feature is enabled.
+
+    The dynamic ``<next_step_state>`` block (asked_count / cooldown / etc.)
+    is injected per-turn by ``NextStepStateMiddleware`` as a system message.
+    Only the static policy + catalog live in the lead-agent baseline prompt.
+    """
+    config = get_next_step_config()
+    if not config.enabled:
+        return ""
+    return NEXT_STEP_SECTION
 
 
 def _build_subagent_section(max_concurrent: int) -> str:
@@ -293,7 +358,7 @@ ignore it and retry the same command, and do not invent a different next step.
 </response_style>
 
 {vendor_concealment}
-
+{next_step_section}
 <critical_reminders>
 - Clarify ambiguous / missing / risky requirements before any tool call (see `<clarification_system>`).
 - Load the relevant skill before complex work; for trade operations the default skill is `erpnext-cli`.
@@ -627,6 +692,7 @@ def apply_prompt_template(
         subagent_reminder=subagent_reminder,
         subagent_thinking=subagent_thinking,
         vendor_concealment=VENDOR_CONCEALMENT_BLOCK,
+        next_step_section=_build_next_step_section(),
     )
 
     return prompt + f"\n<current_date>{datetime.now().strftime('%Y-%m-%d, %A')}</current_date>"

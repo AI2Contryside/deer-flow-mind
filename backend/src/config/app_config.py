@@ -10,6 +10,7 @@ from src.config.checkpointer_config import CheckpointerConfig, load_checkpointer
 from src.config.extensions_config import ExtensionsConfig
 from src.config.memory_config import load_memory_config_from_dict
 from src.config.model_config import ModelConfig
+from src.config.next_step_config import load_next_step_config_from_dict
 from src.config.sandbox_config import SandboxConfig
 from src.config.skills_config import SkillsConfig
 from src.config.subagents_config import load_subagents_config_from_dict
@@ -96,6 +97,10 @@ class AppConfig(BaseModel):
         # Load memory config if present
         if "memory" in config_data:
             load_memory_config_from_dict(config_data["memory"])
+
+        # Load next_step config if present
+        if "next_step" in config_data:
+            load_next_step_config_from_dict(config_data["next_step"])
 
         # Load subagents config if present
         if "subagents" in config_data:

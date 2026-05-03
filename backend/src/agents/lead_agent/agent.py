@@ -7,6 +7,7 @@ from langchain_core.runnables import RunnableConfig
 from src.agents.lead_agent.prompt import apply_prompt_template
 from src.agents.middlewares.clarification_middleware import ClarificationMiddleware
 from src.agents.middlewares.memory_middleware import MemoryMiddleware
+from src.agents.middlewares.next_step_state_middleware import NextStepStateMiddleware
 from src.agents.middlewares.repeated_tool_failure_middleware import RepeatedToolFailureMiddleware
 from src.agents.middlewares.safe_summarization_middleware import SafeSummarizationMiddleware
 from src.agents.middlewares.subagent_limit_middleware import SubagentLimitMiddleware
@@ -17,6 +18,7 @@ from src.agents.middlewares.view_image_middleware import ViewImageMiddleware
 from src.agents.thread_state import ThreadState
 from src.config.agents_config import load_agent_config
 from src.config.app_config import get_app_config
+from src.config.next_step_config import get_next_step_config
 from src.config.summarization_config import get_summarization_config
 from src.models import create_chat_model
 
@@ -238,6 +240,13 @@ def _build_middlewares(config: RunnableConfig, model_name: str | None, agent_nam
 
     # Add MemoryMiddleware (after TitleMiddleware)
     middlewares.append(MemoryMiddleware(agent_name=agent_name))
+
+    # Add NextStepStateMiddleware (proactive next-step suggestion budget /
+    # cooldown). Reads message history, injects a <next_step_state> block
+    # via SystemMessage with a fixed id; idempotent across turns. No-op
+    # when disabled in config — middleware simply isn't appended.
+    if get_next_step_config().enabled:
+        middlewares.append(NextStepStateMiddleware())
 
     # Add ViewImageMiddleware only if the current model supports vision.
     # Use the resolved runtime model_name from make_lead_agent to avoid stale config values.

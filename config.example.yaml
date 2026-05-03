@@ -348,6 +348,31 @@ memory:
   max_injection_tokens: 2000 # Maximum tokens for memory injection
 
 # ============================================================================
+# Next-Step Suggestion Configuration
+# ============================================================================
+# Controls the lead agent's proactive "do you want to do X next?" prompts
+# after a task delivery (e.g. "解析订单完成 → 录入 ERPNext?").
+#
+# Output is a hidden <next_step options="..." primary="..."> tag in the
+# final assistant message; the frontend strips it and renders an action
+# card. Plain-text channels (Feishu / Slack / Telegram) keep the natural-
+# language sentence and drop the tag.
+#
+# Budget / cooldown / keyword recognition are all driven by message
+# history (no thread_data persistence) — see
+# src/agents/middlewares/next_step_state_middleware.py.
+next_step:
+  enabled: true
+  budget: 3                  # max proactive suggestions per conversation
+  cooldown_turns: 5          # silence window after rejection_threshold hits
+  rejection_threshold: 2     # consecutive explicit rejections to enter cooldown
+  same_topic_similarity: 0.6 # difflib ratio above which a new suggestion is treated as the same topic and stripped
+  # reject_keywords / accept_keywords default to a built-in zh+en list;
+  # uncomment + set to override (full replacement, not append).
+  # reject_keywords: ["不用", "先不", ...]
+  # accept_keywords: ["好的", "继续", ...]
+
+# ============================================================================
 # Checkpointer Configuration
 # ============================================================================
 # Configure state persistence for the embedded DeerFlowClient.
