@@ -332,15 +332,23 @@ def test_ocr_tool_forwards_run_metadata_to_invoke(monkeypatch: pytest.MonkeyPatc
         image_path = f.name
 
     runtime = MagicMock()
-    runtime.config = {"metadata": {"session_id": "thread-X", "turn_id": "turn-9"}}
+    # Leave runtime.config empty to prove we read from the LangChain
+    # contextvar (which is the production-reliable source).
+    runtime.config = {}
     runtime.state = {"sandbox": None, "thread_data": {}}
 
-    # The ``@tool`` decorator wraps the function; ``.func`` exposes the raw callable.
-    ocr_tool.func(
-        runtime=runtime,
-        image_path=image_path,
-        tool_call_id="tc-test",
-    )
+    from langchain_core.runnables.config import var_child_runnable_config
+
+    token = var_child_runnable_config.set({"metadata": {"session_id": "thread-X", "turn_id": "turn-9"}})
+    try:
+        # The ``@tool`` decorator wraps the function; ``.func`` exposes the raw callable.
+        ocr_tool.func(
+            runtime=runtime,
+            image_path=image_path,
+            tool_call_id="tc-test",
+        )
+    finally:
+        var_child_runnable_config.reset(token)
 
     metadata = captured_config.get("metadata") or {}
     assert metadata.get("session_id") == "thread-X"

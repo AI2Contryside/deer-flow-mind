@@ -333,10 +333,29 @@ def extract_trade_document_tool(
     #
     # Forward the parent run's metadata (session_id / turn_id) so the
     # token-usage recorder can attribute this OCR call to the same
-    # conversational turn as the rest of the agent's work. Without this,
-    # ``model.invoke`` runs with an empty config and the recorder skips
-    # the call.
-    parent_metadata = dict(runtime.config.get("metadata", {})) if runtime is not None else {}
+    # conversational turn as the rest of the agent's work. ``runtime.config``
+    # inside a tool is a child config scoped to the tool node, so the
+    # turn_id stamped on the parent agent's config does not always
+    # propagate. Read from LangChain's active-runnable-config contextvar
+    # (the same source title_middleware uses) — that one always reflects
+    # the live agent run.
+    parent_metadata: dict = {}
+    try:
+        from langchain_core.runnables.config import var_child_runnable_config
+
+        active_config = var_child_runnable_config.get()
+        if active_config is not None:
+            parent_metadata = dict(active_config.get("metadata") or {})
+    except Exception:  # pragma: no cover - defensive
+        parent_metadata = {}
+    if not parent_metadata and runtime is not None:
+        # Fallback: ToolRuntime.config may carry the metadata too. Cheap
+        # belt-and-braces in case the contextvar isn't populated.
+        try:
+            parent_metadata = dict((runtime.config or {}).get("metadata") or {})
+        except Exception:
+            parent_metadata = {}
+
     invoke_config = {
         "metadata": parent_metadata,
         "tags": ["internal:ocr"],
