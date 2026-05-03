@@ -158,6 +158,11 @@ class TokenUsageRecorder(BaseCallbackHandler):
     ) -> None:
         try:
             meta = metadata or self._pending.pop(run_id, None) or {}
+            # Opt-out flag: call sites that record their own usage directly
+            # (e.g. extract_trade_document_tool) set this so we don't double-
+            # count the same call.
+            if meta.get("_skip_token_recorder"):
+                return
             session_id = meta.get("session_id") or meta.get("thread_id")
             turn_id = meta.get("turn_id")
             if not session_id or not turn_id:

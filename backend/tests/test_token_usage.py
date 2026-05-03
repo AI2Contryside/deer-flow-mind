@@ -140,6 +140,88 @@ def test_callback_skips_when_correlation_metadata_missing(monkeypatch: pytest.Mo
     assert captured == []
 
 
+def test_callback_skips_when_skip_flag_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-out: call sites that record usage themselves set _skip_token_recorder
+    to prevent the callback from double-counting.
+    """
+    from src.storage import token_usage_callback as cb_mod
+    from src.storage.token_usage_callback import TokenUsageRecorder
+
+    captured: list[Any] = []
+    monkeypatch.setattr(cb_mod, "record_usage", captured.append)
+
+    handler = TokenUsageRecorder()
+    handler.on_llm_end(
+        _make_result(model="qwen-vl-max-latest", input_tokens=100, output_tokens=20),
+        run_id=uuid4(),
+        metadata={"session_id": "s", "turn_id": "t", "_skip_token_recorder": True},
+    )
+
+    assert captured == []
+
+
+def test_ocr_tool_directly_records_token_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OCR tool extracts response.usage_metadata and writes the row itself,
+    because the LangChain callback's LLMResult walker comes back empty for
+    DashScope OpenAI-compat responses.
+    """
+    import sys
+    import tempfile
+    from unittest.mock import MagicMock
+
+    from langchain_core.messages import AIMessage
+
+    import src.tools.builtins.extract_trade_document_tool  # noqa: F401  -- ensure submodule load
+
+    ocr_mod = sys.modules["src.tools.builtins.extract_trade_document_tool"]
+    ocr_tool = ocr_mod.extract_trade_document_tool
+
+    response = AIMessage(content='{"doc_type": "unknown", "fields": {}, "items": []}')
+    response.usage_metadata = {
+        "input_tokens": 1234,
+        "output_tokens": 56,
+        "input_token_details": {"cache_read": 100},
+        "output_token_details": {},
+    }
+
+    class _StubModel:
+        def invoke(self, _messages: Any, config: Any = None) -> Any:
+            return response
+
+    monkeypatch.setattr(ocr_mod, "create_chat_model", lambda **_kw: _StubModel())
+    monkeypatch.setattr(ocr_mod, "replace_virtual_path", lambda p, _td: p)
+    monkeypatch.setattr(ocr_mod, "get_thread_data", lambda _r: {})
+    monkeypatch.setattr(ocr_mod, "_push_to_oss", lambda *_a, **_kw: None)
+    monkeypatch.setattr(ocr_mod, "_build_metadata", lambda *_a, **_kw: {})
+
+    captured: list[Any] = []
+
+    # Patch where the OCR tool imports record_usage from (a local import
+    # inside the function; we patch the source module).
+    from src.storage import token_usage as tu_mod
+
+    monkeypatch.setattr(tu_mod, "record_usage", captured.append)
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+        f.write(b"\xff\xd8\xff\xe0fake-jpeg")
+        image_path = f.name
+
+    runtime = MagicMock()
+    runtime.config = {"metadata": {"session_id": "thread-OCR", "turn_id": "turn-OCR"}}
+    runtime.state = {"sandbox": None, "thread_data": {}}
+
+    ocr_tool.func(runtime=runtime, image_path=image_path, tool_call_id="tc-ocr")
+
+    assert len(captured) == 1
+    rec = captured[0]
+    assert rec.session_id == "thread-OCR"
+    assert rec.turn_id == "turn-OCR"
+    assert rec.model == ocr_mod.OCR_MODEL_NAME
+    assert rec.input_tokens == 1234
+    assert rec.output_tokens == 56
+    assert rec.cached_tokens == 100
+
+
 def test_callback_falls_back_to_run_metadata_contextvar(monkeypatch: pytest.MonkeyPatch) -> None:
     """When invoke's config doesn't carry session_id/turn_id, the callback
     must read the per-run ContextVar that make_lead_agent populated.

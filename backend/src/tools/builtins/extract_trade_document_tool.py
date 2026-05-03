@@ -361,28 +361,14 @@ def extract_trade_document_tool(
         except Exception:
             parent_metadata = {}
 
-    # TEMP DIAGNOSTIC: log every source of correlation metadata so we can
-    # see which (if any) reach the OCR tool's invocation context.
-    try:
-        from src.storage.token_usage import get_run_metadata as _diag_get_run_metadata
-
-        _diag_ctxvar = _diag_get_run_metadata()
-    except Exception as _diag_exc:
-        _diag_ctxvar = f"<get_run_metadata raised: {_diag_exc!r}>"
-    _diag_runtime_cfg = None
-    try:
-        _diag_runtime_cfg = (runtime.config or {}).get("metadata") if runtime else None
-    except Exception as _diag_exc:
-        _diag_runtime_cfg = f"<runtime.config raised: {_diag_exc!r}>"
-    logger.warning(
-        "ocr-token-diag: parent_metadata=%r ctxvar=%r runtime_cfg_metadata=%r",
-        parent_metadata,
-        _diag_ctxvar,
-        _diag_runtime_cfg,
-    )
-
     invoke_config = {
-        "metadata": parent_metadata,
+        # ``_skip_token_recorder`` tells the LangChain TokenUsageRecorder
+        # callback to no-op this call — we record it directly below from
+        # ``response.usage_metadata`` because the callback's LLMResult
+        # walker came back empty for DashScope's OpenAI-compat responses.
+        # Without the skip flag, a future fix to the callback would
+        # double-count this OCR call.
+        "metadata": {**parent_metadata, "_skip_token_recorder": True},
         "tags": ["internal:ocr"],
         "run_name": "extract_trade_document",
     }
@@ -392,6 +378,38 @@ def extract_trade_document_tool(
     except Exception as exc:
         logger.exception("OCR model invocation failed for %s", image_path)
         return _error_command(tool_call_id, f"OCR model call failed: {exc}")
+
+    # Record token usage directly, bypassing the LangChain callback. The
+    # callback's ``_build_records`` reads ``Generation.message.usage_metadata``
+    # which is reliably populated for chat-model agent loops but came back
+    # empty for this direct-invoke path on the DashScope OpenAI-compat
+    # endpoint (verified against thread 0d74d5e2-…), so every OCR call was
+    # silently dropped. ``response.usage_metadata`` on the AIMessage IS
+    # populated, so we mirror it into the recorder ourselves.
+    try:
+        usage = getattr(response, "usage_metadata", None) or {}
+        session_id = parent_metadata.get("session_id") or parent_metadata.get("thread_id")
+        turn_id = parent_metadata.get("turn_id")
+        input_tokens = int(usage.get("input_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or 0)
+        if session_id and turn_id and (input_tokens or output_tokens):
+            from src.storage.token_usage import TokenUsageRecord, record_usage
+
+            input_details = usage.get("input_token_details") or {}
+            output_details = usage.get("output_token_details") or {}
+            record_usage(
+                TokenUsageRecord(
+                    session_id=str(session_id),
+                    turn_id=str(turn_id),
+                    model=OCR_MODEL_NAME,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cached_tokens=int(input_details.get("cache_read") or 0),
+                    reasoning_tokens=int(output_details.get("reasoning") or 0),
+                )
+            )
+    except Exception:
+        logger.warning("OCR token-usage direct record failed", exc_info=True)
 
     # 6. Extract text. Some chat-model classes return ``content`` as a
     # list of blocks even for text-only replies; flatten to string.
