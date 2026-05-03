@@ -10,11 +10,11 @@ the new field up automatically.
 
 from src.logctx.config import install_log_filter, log_format_with_context
 from src.logctx.context import (
-    Fields,
     HEADER_LOG_ID,
     HEADER_SESSION_ID,
     HEADER_TENANT_ID,
     HEADER_USER_ID,
+    Fields,
     bind,
     bind_fields,
     current_fields,

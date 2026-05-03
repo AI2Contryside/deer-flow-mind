@@ -10,10 +10,10 @@ unconditionally without raising LookupError.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import Iterator, Mapping
 
 # Header names exchanged with trademind-backend / desktop FE / sibling
 # services. Keep in sync with internal/ctxutil/ctxutil.go on the Go side.
@@ -52,7 +52,7 @@ class Fields:
     def as_dict(self) -> dict[str, str]:
         return {name: getattr(self, name) for name in KNOWN_FIELDS}
 
-    def merged_with(self, other: "Fields") -> "Fields":
+    def merged_with(self, other: Fields) -> Fields:
         """Return a new Fields where non-empty values in ``other`` win."""
         kwargs = self.as_dict()
         for name in KNOWN_FIELDS:

@@ -8,7 +8,7 @@ automatically, so skill / sandbox HTTP wrappers don't need updating.
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from src.logctx.context import headers_from_context
 

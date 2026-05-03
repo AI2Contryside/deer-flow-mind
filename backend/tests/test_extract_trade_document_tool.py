@@ -23,11 +23,7 @@ hit from unit tests. Instead we cover:
 
 from __future__ import annotations
 
-import io
 from typing import get_args, get_type_hints
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 def test_extract_trade_document_tool_exported() -> None:
@@ -271,8 +267,9 @@ def test_format_summary_unknown_doc_type_no_bullets() -> None:
 
 
 def test_error_command_returns_tool_message() -> None:
-    from src.tools.builtins.extract_trade_document_tool import _error_command
     from langchain_core.messages import ToolMessage
+
+    from src.tools.builtins.extract_trade_document_tool import _error_command
 
     cmd = _error_command("tc-1", "boom")
     msgs = cmd.update["messages"]
