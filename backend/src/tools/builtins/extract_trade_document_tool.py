@@ -356,6 +356,26 @@ def extract_trade_document_tool(
         except Exception:
             parent_metadata = {}
 
+    # TEMP DIAGNOSTIC: log every source of correlation metadata so we can
+    # see which (if any) reach the OCR tool's invocation context.
+    try:
+        from src.storage.token_usage import get_run_metadata as _diag_get_run_metadata
+
+        _diag_ctxvar = _diag_get_run_metadata()
+    except Exception as _diag_exc:
+        _diag_ctxvar = f"<get_run_metadata raised: {_diag_exc!r}>"
+    _diag_runtime_cfg = None
+    try:
+        _diag_runtime_cfg = (runtime.config or {}).get("metadata") if runtime else None
+    except Exception as _diag_exc:
+        _diag_runtime_cfg = f"<runtime.config raised: {_diag_exc!r}>"
+    logger.warning(
+        "ocr-token-diag: parent_metadata=%r ctxvar=%r runtime_cfg_metadata=%r",
+        parent_metadata,
+        _diag_ctxvar,
+        _diag_runtime_cfg,
+    )
+
     invoke_config = {
         "metadata": parent_metadata,
         "tags": ["internal:ocr"],
