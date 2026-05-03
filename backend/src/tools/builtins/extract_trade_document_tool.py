@@ -404,15 +404,36 @@ def extract_trade_document_tool(
     # populated, so we mirror it into the recorder ourselves.
     try:
         usage = getattr(response, "usage_metadata", None) or {}
+        # TEMP DIAG: confirm what shape qwen3.6-flash returns and whether
+        # parent_metadata reached this branch.
+        logger.warning(
+            "ocr-record-diag: usage=%r response_metadata_keys=%r parent_meta_keys=%r",
+            usage,
+            list((getattr(response, "response_metadata", {}) or {}).keys()),
+            list(parent_metadata.keys()),
+        )
         session_id = parent_metadata.get("session_id") or parent_metadata.get("thread_id")
         turn_id = parent_metadata.get("turn_id")
         input_tokens = int(usage.get("input_tokens") or 0)
         output_tokens = int(usage.get("output_tokens") or 0)
+        # Fallback: if usage_metadata is missing/empty, try the OpenAI-style
+        # response_metadata.token_usage block that DashScope reliably populates.
+        if not (input_tokens or output_tokens):
+            raw_usage = (getattr(response, "response_metadata", None) or {}).get("token_usage") or {}
+            input_tokens = int(raw_usage.get("prompt_tokens") or 0)
+            output_tokens = int(raw_usage.get("completion_tokens") or 0)
+            cached_from_raw = ((raw_usage.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0
+            reasoning_from_raw = ((raw_usage.get("completion_tokens_details") or {}).get("reasoning_tokens")) or 0
+        else:
+            cached_from_raw = 0
+            reasoning_from_raw = 0
         if session_id and turn_id and (input_tokens or output_tokens):
             from src.storage.token_usage import TokenUsageRecord, record_usage
 
             input_details = usage.get("input_token_details") or {}
             output_details = usage.get("output_token_details") or {}
+            cached_tokens = int(input_details.get("cache_read") or 0) or cached_from_raw
+            reasoning_tokens = int(output_details.get("reasoning") or 0) or reasoning_from_raw
             record_usage(
                 TokenUsageRecord(
                     session_id=str(session_id),
@@ -420,8 +441,8 @@ def extract_trade_document_tool(
                     model=OCR_MODEL_NAME,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
-                    cached_tokens=int(input_details.get("cache_read") or 0),
-                    reasoning_tokens=int(output_details.get("reasoning") or 0),
+                    cached_tokens=cached_tokens,
+                    reasoning_tokens=reasoning_tokens,
                 )
             )
     except Exception:
