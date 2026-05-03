@@ -279,7 +279,7 @@ ignore it and retry the same command, and do not invent a different next step.
 **路由规则：**
 
 - **外贸单据图片** → 直接调用 ``extract_trade_document(image_path="/mnt/user-data/uploads/<文件名>")``。
-  这是一个 builtin tool，单次调用 qwen-vl-ocr 提取结构化字段并把 JSON artifact 自动推到前端 Canvas，
+  这是一个 builtin tool，单次调用 Qwen3.6-Flash 提取结构化字段并把 JSON artifact 自动推到前端 Canvas，
   **不需要**也**不要**调用 ``task(subagent_type=...)`` 或 ``present_files``——tool 内部已经把
   artifact / artifact_metadata 写进了 state。一张图一次 LLM 调用，成本最优。
 
@@ -315,7 +315,7 @@ ignore it and retry the same command, and do not invent a different next step.
 - 若用户没传图片但要求"识别发票" / "看一下这张图"等含图任务，按 ``<clarification_system>`` 的 ``missing_info``
   模式让用户先上传图片，**不要**先调 tool 或 subagent。
 
-**成本意识：** ``extract_trade_document`` 每张图一次 qwen-vl-ocr 调用，是最便宜的视觉路径；
+**成本意识：** ``extract_trade_document`` 每张图一次 Qwen3.6-Flash 调用，是最便宜的视觉路径；
 ``task(vision-analyst)`` 每次至少 2-3 次 qwen-vl-plus 调用。优先用 tool，仅在用户明确不是单据/需要多轮看图时走 subagent。
 </vision_routing>
 

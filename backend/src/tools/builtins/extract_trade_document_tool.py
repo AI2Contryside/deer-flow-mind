@@ -3,17 +3,17 @@
 Replaces the previous ``ocr-extractor`` subagent with a single tool
 invocation. Cost / correctness rationale:
 
-* qwen-vl-ocr-latest is the OCR-specialised checkpoint (~5-10x cheaper
-  output tokens than qwen-vl-plus / qwen-vl-max), but it is a
-  stateless single-turn model — it 400s on requests that contain a
-  system message, multi-turn history, or tool-call sequences, which
-  is exactly what LangChain's ``create_agent`` + ``view_image_tool``
-  loop produces. So we cannot route it through a subagent.
-* As a tool, we control the messages payload directly: one
-  ``HumanMessage`` with ``[image_url, text]`` content blocks. That is
-  the only shape qwen-vl-ocr accepts, and it costs exactly one LLM
-  call per document instead of the 3-5 calls a subagent loop spends
-  on viewing → thinking → writing JSON → present_files.
+* Qwen3.6-Flash is the multimodal flash-tier checkpoint we route OCR
+  through. We invoke it directly as a tool (one ``HumanMessage`` with
+  ``[image_url, text]`` content blocks) instead of wrapping it in a
+  ``create_agent`` + ``view_image_tool`` loop. One LLM call per
+  document instead of the 3-5 calls a subagent loop spends on
+  viewing → thinking → writing JSON → present_files.
+* Thinking mode is explicitly disabled in ``config.yaml`` via
+  ``extra_body.enable_thinking=false``. OCR is a deterministic
+  transcription task; reasoning tokens add latency and cost without
+  improving fidelity, and the single-shot HumanMessage payload can't
+  carry ``reasoning_content`` across turns even if we wanted to.
 
 Lead agent's ``<vision_routing>`` block routes here for trade
 documents (Commercial Invoice, Packing List, B/L, Customs
@@ -55,7 +55,7 @@ from src.tools.builtins.present_file_tool import _build_metadata, _push_to_oss
 
 logger = logging.getLogger(__name__)
 
-OCR_MODEL_NAME = "qwen-vl-max-latest"
+OCR_MODEL_NAME = "Qwen3.6-Flash"
 
 # DashScope vision endpoint caps a single image at ~10 MB raw bytes;
 # base64 encoding adds ~33% so the wire payload stays under the upstream
@@ -63,16 +63,18 @@ OCR_MODEL_NAME = "qwen-vl-max-latest"
 # of waiting for an opaque 413 / 400 from the provider.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
-# qwen-vl-max accepts the same set of formats as the other Qwen-VL
-# models. We deliberately limit the surface to keep error reporting
-# tight — uncommon formats can be re-encoded by the user.
+# Qwen3.6-Flash accepts the standard Qwen-VL image set. We deliberately
+# limit the surface to keep error reporting tight — uncommon formats
+# can be re-encoded by the user.
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
-# Output cap. Even qwen-vl-max-latest's 8192-token ceiling can't fit
-# arbitrary-length item tables (a 321-row sales order would need
-# ~11k tokens of JSON). The prompt instructs the model to clamp items
-# to the first 100 rows and report the full count in `notes`; this
-# constant exists so the prompt and the post-validation never drift.
+# Output cap. Qwen3.6-Flash exposes a 1M context window so a single
+# response can technically fit thousands of items, but per-row OCR
+# fidelity drops once the model is asked to keep too many parallel
+# fields in flight. Clamp at 100 rows per call and report the full
+# count in `notes`; users with denser docs can split the image or
+# export to Excel. The constant lives in code so the prompt and the
+# post-validation can never drift.
 MAX_LINE_ITEMS_PER_CALL = 100
 
 
@@ -85,14 +87,13 @@ def _build_extract_prompt() -> str:
     user message — there is no system prompt, intentionally, to keep
     one shape across providers.
 
-    Token budget guidance is non-trivial here. qwen-vl-max-latest caps
-    output at 8192 tokens. A naïve "extract everything" prompt will
-    blow past that on dense documents (a 321-row sales order produced
-    ~11k tokens of JSON in production and the response was truncated
-    mid-array). So the prompt deliberately constrains the two fields
-    that grow without bound: ``raw_text`` (full transcription) and
-    ``structured.items`` (line-item table). Headers and totals are
-    always small — those stay unconstrained.
+    Even with Qwen3.6-Flash's 1M context window we still constrain
+    the two fields that grow without bound: ``raw_text`` (full
+    transcription) and ``structured.items`` (line-item table). Output
+    headroom isn't the bottleneck anymore — per-row fidelity is. Asking
+    the model to hold 300+ items in working memory degrades extraction
+    quality even when the JSON would fit. Headers and totals stay
+    unconstrained; they're always small.
     """
     return f"""请对这张外贸单据图片做严格 OCR 与字段抽取，**只输出 JSON**，不要解释、不要 markdown 代码块包裹。
 
@@ -137,13 +138,14 @@ def _strip_code_fence(text: str) -> str:
 def _try_recover_truncated_json(raw: str) -> dict | None:
     """Best-effort recovery of a truncated JSON object.
 
-    qwen-vl-max-latest caps output at ~8192 tokens. A response cut
-    off mid-array (the ``items`` field is the usual culprit) leaves
-    us with valid JSON up to some last comma followed by an
-    incomplete item, then no closing brackets. Falling back to
-    ``unknown_ocr.json`` in that case throws away everything the
-    model DID extract — the doc_type, the headers, and the first
-    50-90 valid items.
+    Even with Qwen3.6-Flash's 1M context window, responses can still
+    get cut off mid-array — provider-side hard caps, network drops,
+    or pathological prompts that explode token count. The ``items``
+    field is the usual culprit: we land with valid JSON up to some
+    last comma followed by an incomplete item and no closing brackets.
+    Falling back to ``unknown_ocr.json`` in that case throws away
+    everything the model DID extract — doc_type, headers, and the
+    valid items already in hand.
 
     Strategy:
       1. Walk backwards to find the last complete value boundary
@@ -314,9 +316,10 @@ def extract_trade_document_tool(
         # for some PNGs; a wrong mime is much better than a missing one.
         mime_type = "image/jpeg"
 
-    # 4. Build the SINGLE user message. No system prompt — qwen-vl-ocr
-    # rejects it. No ToolMessage history — qwen-vl-ocr rejects that
-    # too. Just one user message with image + instruction.
+    # 4. Build the SINGLE user message. One user message with image +
+    # instruction — no system prompt, no ToolMessage history, so the
+    # payload shape is identical regardless of which Qwen-VL checkpoint
+    # is wired in via OCR_MODEL_NAME.
     messages = [
         HumanMessage(
             content=[
@@ -326,10 +329,12 @@ def extract_trade_document_tool(
         )
     ]
 
-    # 5. Direct invoke. ``thinking_enabled=False`` — qwen-vl-ocr has no
-    # thinking mode anyway and the flag would noop, but we set it
-    # explicitly so the factory doesn't try to apply thinking
-    # parameters from a future config.yaml typo.
+    # 5. Direct invoke. ``thinking_enabled=False`` because OCR is a
+    # deterministic transcription — Qwen3.6-Flash is a thinking-capable
+    # model whose thinking mode is also pinned off in config.yaml via
+    # ``extra_body.enable_thinking=false``. Both the call-site flag and
+    # the static config disable thinking; either alone would suffice
+    # but together they survive future config typos.
     #
     # Forward the parent run's metadata (session_id / turn_id) so the
     # token-usage recorder can attribute this OCR call to the same

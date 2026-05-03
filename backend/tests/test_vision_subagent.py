@@ -19,9 +19,7 @@ plan (see plan file).
 
 from __future__ import annotations
 
-import inspect
-import typing
-from typing import Literal, get_args, get_type_hints
+from typing import get_args, get_type_hints
 
 import pytest
 
@@ -140,24 +138,23 @@ def test_qwen_vl_models_loadable(loaded_app_config) -> None:
     """config.yaml exposes both Qwen-VL variants with supports_vision=True.
 
     Two distinct models, two different invocation paths:
-    - ``qwen-vl-max-latest`` is consumed by the
-      ``extract_trade_document`` builtin tool via direct
-      ``model.invoke([HumanMessage(image+text)])``. We tried
-      ``qwen-vl-ocr-latest`` first (cheaper) but its 4096-token
-      output cap truncated dense trade documents (321-row sales
-      order produced ~11k tokens of JSON). qwen-vl-max-latest's
-      8192-token cap fits ~100 line items and OCR fidelity matches.
+    - ``Qwen3.6-Flash`` is consumed by the ``extract_trade_document``
+      builtin tool via direct ``model.invoke([HumanMessage(image+text)])``.
+      The model is thinking-capable but OCR is a deterministic
+      transcription task — thinking is disabled in config via
+      ``extra_body.enable_thinking=false`` AND in code via the
+      ``thinking_enabled=False`` argument to ``create_chat_model``.
     - ``qwen-vl-plus-latest`` is the model for the ``vision-analyst``
       subagent (multi-turn agent loop is fine here).
 
-    Neither must claim ``supports_thinking`` — Qwen-VL has no thinking
-    mode in the DashScope OpenAI-compat protocol; flagging it would
-    enable a thinking parameter the gateway would 400 on.
+    Neither must claim ``supports_thinking`` in config — that flag would
+    let the agent toggle thinking on at runtime, which is precisely the
+    behaviour OCR has to avoid.
     """
     from src.config import get_app_config
 
     app_cfg = get_app_config()
-    for name in ("qwen-vl-max-latest", "qwen-vl-plus-latest"):
+    for name in ("Qwen3.6-Flash", "qwen-vl-plus-latest"):
         cfg = app_cfg.get_model_config(name)
         assert cfg is not None, f"{name} missing from config.yaml models[]"
         assert cfg.supports_vision is True
