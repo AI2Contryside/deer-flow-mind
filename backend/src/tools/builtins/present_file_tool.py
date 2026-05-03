@@ -206,3 +206,56 @@ def present_file_tool(
 
     # The merge_artifacts / merge_artifact_metadata reducers handle dedup
     return Command(update=update)
+
+
+def try_resync_presented_artifact(
+    runtime: ToolRuntime[ContextT, ThreadState],
+    filepath: str,
+    tool_call_id: str,
+) -> Command | None:
+    """Re-push an artifact to OSS when it has already been presented.
+
+    Called by write_file / str_replace after they modify a file in the sandbox.
+    If the file is in the current ``ThreadState.artifacts`` list (i.e. the agent
+    already called ``present_files`` for it earlier in this thread), we re-upload
+    the file to OSS at the same key and emit an ``artifact_metadata`` update so
+    the gateway re-signs the URL and the FE re-downloads with fresh bytes.
+
+    Without this, every "modify a previously-presented file" turn is invisible to
+    the FE: ``str_replace`` and ``write_file`` only return ``"OK"`` and never
+    touch ``artifact_metadata``, so the canvas keeps showing stale content until
+    the agent remembers to call ``present_files`` again — which it routinely
+    doesn't, because nothing forces it to.
+
+    Returns:
+        A ``Command`` carrying the metadata update + the tool's ``ToolMessage``
+        when a resync was performed, or ``None`` when no resync applies (file
+        not under outputs/, never presented, no thread context, OSS unconfigured).
+        Callers should return ``"OK"`` when this returns ``None``.
+    """
+    if runtime.state is None:
+        return None
+    artifacts = runtime.state.get("artifacts") or []
+    if not artifacts:
+        return None
+
+    try:
+        normalized = _normalize_presented_filepath(runtime, filepath)
+    except ValueError:
+        # File isn't under /mnt/user-data/outputs — can't be a presented artifact.
+        return None
+    if normalized not in artifacts:
+        return None
+
+    thread_id = runtime.context.get("thread_id") if runtime.context else None
+    tenant_id = runtime.context.get("tenant_id") if runtime.context else None
+    if not thread_id:
+        return None
+
+    uploaded = _push_to_oss(thread_id, tenant_id, normalized)
+    metadata = _build_metadata(thread_id, tenant_id, normalized, uploaded)
+
+    update: dict = {"messages": [ToolMessage("OK", tool_call_id=tool_call_id)]}
+    if metadata:
+        update["artifact_metadata"] = [metadata]
+    return Command(update=update)

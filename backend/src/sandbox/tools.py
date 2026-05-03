@@ -1,6 +1,8 @@
 import re
+from typing import Annotated
 
-from langchain.tools import ToolRuntime, tool
+from langchain.tools import InjectedToolCallId, ToolRuntime, tool
+from langgraph.types import Command
 from langgraph.typing import ContextT
 
 from src.agents.thread_state import ThreadDataState, ThreadState
@@ -12,6 +14,23 @@ from src.sandbox.exceptions import (
 )
 from src.sandbox.sandbox import Sandbox
 from src.sandbox.sandbox_provider import get_sandbox_provider
+
+
+def _maybe_resync_presented_artifact(
+    runtime: ToolRuntime[ContextT, ThreadState],
+    original_path: str,
+    tool_call_id: str,
+) -> Command | None:
+    """Lazy wrapper around ``try_resync_presented_artifact``.
+
+    Imported inside the function to avoid a circular import between
+    ``src.sandbox.tools`` and ``src.tools.builtins.present_file_tool``
+    (the latter is loaded by ``src.tools.builtins.__init__`` alongside other
+    builtin tools that already depend on ``src.sandbox.tools``).
+    """
+    from src.tools.builtins.present_file_tool import try_resync_presented_artifact
+
+    return try_resync_presented_artifact(runtime, original_path, tool_call_id)
 
 
 def replace_virtual_path(path: str, thread_data: ThreadDataState | None) -> str:
@@ -427,8 +446,9 @@ def write_file_tool(
     description: str,
     path: str,
     content: str,
+    tool_call_id: Annotated[str, InjectedToolCallId],
     append: bool = False,
-) -> str:
+) -> str | Command:
     """Write text content to a file.
 
     Args:
@@ -436,6 +456,7 @@ def write_file_tool(
         path: The **absolute** path to the file to write to. ALWAYS PROVIDE THIS PARAMETER SECOND.
         content: The content to write to the file. ALWAYS PROVIDE THIS PARAMETER THIRD.
     """
+    original_path = path
     try:
         sandbox = ensure_sandbox_initialized(runtime)
         ensure_thread_directories_exist(runtime)
@@ -443,6 +464,12 @@ def write_file_tool(
             thread_data = get_thread_data(runtime)
             path = replace_virtual_path(path, thread_data)
         sandbox.write_file(path, content, append)
+        # If the file was already presented to the user, re-sync to OSS so the
+        # gateway re-signs the URL and the canvas re-downloads. Without this, a
+        # second-turn modification of a presented file is invisible to the FE.
+        resync = _maybe_resync_presented_artifact(runtime, original_path, tool_call_id)
+        if resync is not None:
+            return resync
         return "OK"
     except SandboxError as e:
         return f"Error: {e}"
@@ -463,8 +490,9 @@ def str_replace_tool(
     path: str,
     old_str: str,
     new_str: str,
+    tool_call_id: Annotated[str, InjectedToolCallId],
     replace_all: bool = False,
-) -> str:
+) -> str | Command:
     """Replace a substring in a file with another substring.
     If `replace_all` is False (default), the substring to replace must appear **exactly once** in the file.
 
@@ -475,6 +503,7 @@ def str_replace_tool(
         new_str: The new substring. ALWAYS PROVIDE THIS PARAMETER FOURTH.
         replace_all: Whether to replace all occurrences of the substring. If False, only the first occurrence will be replaced. Default is False.
     """
+    original_path = path
     try:
         sandbox = ensure_sandbox_initialized(runtime)
         ensure_thread_directories_exist(runtime)
@@ -491,6 +520,12 @@ def str_replace_tool(
         else:
             content = content.replace(old_str, new_str, 1)
         sandbox.write_file(path, content)
+        # If the file was already presented to the user, re-sync to OSS so the
+        # gateway re-signs the URL and the canvas re-downloads. Without this, a
+        # second-turn modification of a presented file is invisible to the FE.
+        resync = _maybe_resync_presented_artifact(runtime, original_path, tool_call_id)
+        if resync is not None:
+            return resync
         return "OK"
     except SandboxError as e:
         return f"Error: {e}"
