@@ -130,11 +130,21 @@ def test_get_tenant_memory_key_rejects_invalid(bad_id: str) -> None:
         get_tenant_memory_key(bad_id)
 
 
-def test_get_tenant_memory_key_rejects_non_string() -> None:
-    with pytest.raises(ValueError):
-        get_tenant_memory_key(None)  # type: ignore[arg-type]
-    with pytest.raises(ValueError):
-        get_tenant_memory_key(42)  # type: ignore[arg-type]
+def test_get_tenant_memory_key_accepts_int() -> None:
+    """Int tenant ids (Go gateway sends JSON numbers) must produce the same
+    key shape as their string equivalents — they are coerced to str inside
+    the storage layer."""
+    assert get_tenant_memory_key(42) == "42/memory.json"
+    assert get_tenant_memory_key(42) == get_tenant_memory_key("42")
+
+
+def test_get_tenant_memory_key_rejects_unsupported_types() -> None:
+    """Anything that's neither a str-like id nor an int still has to raise
+    so callers don't accidentally smuggle dicts / Paths / bools into a
+    filesystem path."""
+    for bad in (None, True, False, 0, "", b"42", 1.5, {"id": "1"}, ["1"]):
+        with pytest.raises(ValueError):
+            get_tenant_memory_key(bad)  # type: ignore[arg-type]
 
 
 # ── 3. _get_memory_context fail-closed ────────────────────────────────────

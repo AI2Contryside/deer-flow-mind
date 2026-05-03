@@ -249,3 +249,67 @@ def test_mirror_skipped_when_local_write_fails(
 
     assert ok is False
     assert fake_oss.list_keys("trademind-chat-session") == []
+
+
+@pytest.mark.unit
+def test_write_memory_accepts_int_tenant_id(
+    fresh_memory_storage: FileMemoryStorage,
+    fake_oss: oss_module.InMemoryStorage,
+) -> None:
+    """The Go gateway forwards tenant_id as int64 (JSON number). The storage
+    layer must coerce ints to str so the call path doesn't blow up before
+    touching OSS — regression for the dev-box bug where every memory update
+    failed with ``invalid tenant_id for memory key: 1`` and nothing was
+    mirrored."""
+    ok = write_memory(1, create_empty_memory())  # type: ignore[arg-type]
+
+    assert ok is True
+    assert "tenants/1/memory/memory.json" in fake_oss.list_keys("trademind-chat-session")
+    # Local cache uses the same string-coerced shard.
+    assert (fresh_memory_storage._base_dir / "1" / "memory.json").exists()
+
+
+@pytest.mark.unit
+def test_read_memory_from_oss_accepts_int_tenant_id(
+    fresh_memory_storage: FileMemoryStorage,
+    fake_oss: oss_module.InMemoryStorage,
+) -> None:
+    fake_oss.put_text(
+        "trademind-chat-session",
+        "tenants/7/memory/memory.json",
+        json.dumps({"version": "1.0", "user": {}, "history": {}, "facts": []}),
+    )
+
+    result = read_memory_from_oss(7)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result["version"] == "1.0"
+
+
+@pytest.mark.unit
+def test_read_memory_accepts_int_tenant_id(
+    fresh_memory_storage: FileMemoryStorage,
+    fake_oss: oss_module.InMemoryStorage,
+) -> None:
+    """Read path must accept int too — the Go gateway pulls tenant memory
+    for the FE settings page using the same numeric tenant_id."""
+    payload = create_empty_memory()
+    payload["facts"].append(
+        {
+            "id": "fact_int",
+            "content": "int tenant works",
+            "category": "context",
+            "confidence": 0.9,
+            "createdAt": "2026-05-03T00:00:00Z",
+            "source": "test",
+        }
+    )
+    fake_oss.put_text(
+        "trademind-chat-session",
+        "tenants/9/memory/memory.json",
+        json.dumps(payload),
+    )
+
+    result = read_memory(9)  # type: ignore[arg-type]
+
+    assert any(f["id"] == "fact_int" for f in result["facts"])

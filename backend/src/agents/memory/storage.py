@@ -23,6 +23,25 @@ _TENANT_ID_RE = re.compile(r"[A-Za-z0-9_\-]{1,64}")
 _OSS_CONTENT_TYPE = "application/json; charset=utf-8"
 
 
+def _normalize_tenant_id(value: Any) -> str | None:
+    """Coerce a tenant id to a safe string, or return None when invalid.
+
+    The Go gateway forwards ``tenant_id`` as a JSON number (int64), and
+    LangGraph hands it to middlewares verbatim — the previous string-only
+    ``isinstance`` check at this boundary rejected every numeric id and
+    silently dropped both the local write and the OSS mirror. Mirrors the
+    ``int | str`` contract the OSS key builders in ``src/storage/keys.py``
+    already expose.
+    """
+    if value is None or value == "" or value == 0:
+        return None
+    # ``bool`` is a subclass of ``int``; keep True/False out of the path.
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    candidate = str(value)
+    return candidate if _TENANT_ID_RE.fullmatch(candidate) else None
+
+
 class MemoryStorage(ABC):
     """Abstract base class for memory storage backends."""
 
@@ -217,15 +236,18 @@ def set_memory_storage(storage: FileMemoryStorage) -> None:
         _storage_instance = storage
 
 
-def get_tenant_memory_key(tenant_id: str) -> str:
+def get_tenant_memory_key(tenant_id: int | str) -> str:
     """Get the storage key for tenant memory.
 
     The ``memory/`` segment lives in ``storage_path`` (config), not in the
     key — otherwise we end up with ``{base}/memory/memory/{tenant}/memory.json``
     which is what the previous layout produced inside the container.
 
+    Accepts both ``int`` and ``str`` because the Go gateway sends JSON
+    numbers; the value is coerced to ``str`` after charset validation.
+
     Args:
-        tenant_id: The tenant ID
+        tenant_id: The tenant ID (int or str)
 
     Returns:
         Storage key for tenant memory: ``<tenant_id>/memory.json``.
@@ -236,9 +258,10 @@ def get_tenant_memory_key(tenant_id: str) -> str:
         so anything else (``..``, ``/``, control chars) could let a caller
         read or overwrite another tenant's memory file.
     """
-    if not isinstance(tenant_id, str) or not _TENANT_ID_RE.fullmatch(tenant_id):
+    normalized = _normalize_tenant_id(tenant_id)
+    if normalized is None:
         raise ValueError(f"invalid tenant_id for memory key: {tenant_id!r}")
-    return f"{tenant_id}/memory.json"
+    return f"{normalized}/memory.json"
 
 
 def create_empty_memory() -> dict[str, Any]:
@@ -264,7 +287,7 @@ def create_empty_memory() -> dict[str, Any]:
     }
 
 
-def read_memory(tenant_id: str) -> dict[str, Any]:
+def read_memory(tenant_id: int | str) -> dict[str, Any]:
     """Read memory for a specific tenant.
 
     Reads the local cache first; on a miss, falls back to OSS and replicates
@@ -308,7 +331,7 @@ def read_memory(tenant_id: str) -> dict[str, Any]:
         return oss_data
 
 
-def write_memory(tenant_id: str, data: dict[str, Any]) -> bool:
+def write_memory(tenant_id: int | str, data: dict[str, Any]) -> bool:
     """Write memory for a specific tenant.
 
     Writes through to the local cache first, then mirrors the same payload
@@ -349,7 +372,7 @@ def write_memory(tenant_id: str, data: dict[str, Any]) -> bool:
         return ok
 
 
-def read_memory_from_oss(tenant_id: str) -> dict[str, Any] | None:
+def read_memory_from_oss(tenant_id: int | str) -> dict[str, Any] | None:
     """Pull a memory JSON object from OSS into a dict.
 
     Returns ``None`` when OSS is unconfigured, the tenant_id is invalid,
@@ -357,9 +380,10 @@ def read_memory_from_oss(tenant_id: str) -> dict[str, Any] | None:
     by ``read_memory`` for cache-miss fallback and externally by callers
     (e.g. the gateway-backed FE) that need to read memory across hosts.
     """
-    if not isinstance(tenant_id, str) or not _TENANT_ID_RE.fullmatch(tenant_id):
+    normalized = _normalize_tenant_id(tenant_id)
+    if normalized is None:
         return None
-    storage, bucket, key = _resolve_oss_target(tenant_id)
+    storage, bucket, key = _resolve_oss_target(normalized)
     if storage is None or bucket is None or key is None:
         return None
     try:
@@ -377,9 +401,12 @@ def read_memory_from_oss(tenant_id: str) -> dict[str, Any] | None:
     return data
 
 
-def _mirror_memory_to_oss(tenant_id: str, payload: bytes) -> None:
+def _mirror_memory_to_oss(tenant_id: int | str, payload: bytes) -> None:
     """Best-effort upload of the freshly-written memory document to OSS."""
-    storage, bucket, key = _resolve_oss_target(tenant_id)
+    normalized = _normalize_tenant_id(tenant_id)
+    if normalized is None:
+        return
+    storage, bucket, key = _resolve_oss_target(normalized)
     if storage is None or bucket is None or key is None:
         return
     try:
@@ -393,7 +420,7 @@ def _mirror_memory_to_oss(tenant_id: str, payload: bytes) -> None:
         logger.warning("memory: OSS mirror failed for tenant %r: %s", tenant_id, exc)
 
 
-def _resolve_oss_target(tenant_id: str) -> tuple[Any, str | None, str | None]:
+def _resolve_oss_target(tenant_id: int | str) -> tuple[Any, str | None, str | None]:
     """Return ``(storage, bucket, key)`` or ``(None, None, None)`` when OSS
     isn't configured. Lazy imports keep this module testable without
     pulling oss2 at module-load time."""
