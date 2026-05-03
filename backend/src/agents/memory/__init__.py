@@ -24,6 +24,7 @@ from src.agents.memory.storage import (
     get_memory_storage,
     get_tenant_memory_key,
     read_memory,
+    read_memory_from_oss,
     write_memory,
 )
 from src.agents.memory.updater import (
@@ -61,5 +62,6 @@ __all__ = [
     "get_memory_storage",
     "get_tenant_memory_key",
     "read_memory",
+    "read_memory_from_oss",
     "write_memory",
 ]

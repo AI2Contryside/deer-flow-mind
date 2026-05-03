@@ -1,6 +1,9 @@
 """Memory storage abstraction layer with support for multiple backends."""
 
+import copy
+import io
 import json
+import logging
 import re
 import threading
 from abc import ABC, abstractmethod
@@ -10,10 +13,14 @@ from typing import Any
 
 from src.config.memory_config import get_memory_config
 
+logger = logging.getLogger(__name__)
+
 # Tenant ids come from a trusted upstream (gateway-issued JWT claim) but are
 # interpolated directly into a filesystem path; treat them as untrusted at the
 # storage boundary and reject anything that could escape the per-tenant dir.
 _TENANT_ID_RE = re.compile(r"[A-Za-z0-9_\-]{1,64}")
+
+_OSS_CONTENT_TYPE = "application/json; charset=utf-8"
 
 
 class MemoryStorage(ABC):
@@ -260,6 +267,11 @@ def create_empty_memory() -> dict[str, Any]:
 def read_memory(tenant_id: str) -> dict[str, Any]:
     """Read memory for a specific tenant.
 
+    Reads the local cache first; on a miss, falls back to OSS and replicates
+    the result back to the local cache so subsequent reads stay fast. When
+    OSS is unavailable or empty for the tenant, returns a fresh empty
+    memory document.
+
     Args:
         tenant_id: The tenant ID
 
@@ -270,25 +282,131 @@ def read_memory(tenant_id: str) -> dict[str, Any]:
 
     memory_key = get_tenant_memory_key(tenant_id)
     memory_data = storage.read(memory_key)
-    if memory_data is None:
-        memory_data = create_empty_memory()
+    if memory_data is not None:
+        return memory_data
 
-    return memory_data
+    lock = storage.get_lock(memory_key)
+    with lock:
+        memory_data = storage.read(memory_key)
+        if memory_data is not None:
+            return memory_data
+
+        oss_data = read_memory_from_oss(tenant_id)
+        if oss_data is None:
+            return create_empty_memory()
+
+        try:
+            # FileMemoryStorage.write mutates ``lastUpdated`` in place; deepcopy
+            # so the dict we return reflects what's actually stored in OSS.
+            storage.write(memory_key, copy.deepcopy(oss_data))
+        except Exception as exc:  # noqa: BLE001 — local cache is best-effort
+            logger.warning(
+                "memory: failed to cache OSS data locally for tenant %r: %s",
+                tenant_id,
+                exc,
+            )
+        return oss_data
 
 
 def write_memory(tenant_id: str, data: dict[str, Any]) -> bool:
     """Write memory for a specific tenant.
+
+    Writes through to the local cache first, then mirrors the same payload
+    to OSS as a best-effort upload. The local write is the source of truth
+    for the agent's hot path; OSS is the durability layer that survives
+    container rebuilds and lets sibling services (e.g. the gateway-side FE)
+    read the same memory without reaching into DeerFlow's filesystem.
 
     Args:
         tenant_id: The tenant ID
         data: The memory data to write
 
     Returns:
-        True if successful
+        True if the local write succeeded. OSS mirror failures are logged
+        and swallowed so a transient OSS outage does not surface as a
+        failed memory update.
     """
     storage = get_memory_storage()
 
     memory_key = get_tenant_memory_key(tenant_id)
     lock = storage.get_lock(memory_key)
     with lock:
-        return storage.write(memory_key, data)
+        ok = storage.write(memory_key, data)
+        if ok:
+            # ``storage.write`` mutates ``data`` in place to stamp lastUpdated,
+            # so serialising ``data`` here gives a payload byte-identical to
+            # what landed on disk.
+            try:
+                payload = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    "memory: skipped OSS mirror for tenant %r — payload not serialisable: %s",
+                    tenant_id,
+                    exc,
+                )
+            else:
+                _mirror_memory_to_oss(tenant_id, payload)
+        return ok
+
+
+def read_memory_from_oss(tenant_id: str) -> dict[str, Any] | None:
+    """Pull a memory JSON object from OSS into a dict.
+
+    Returns ``None`` when OSS is unconfigured, the tenant_id is invalid,
+    the object is missing, or deserialization fails. Used both internally
+    by ``read_memory`` for cache-miss fallback and externally by callers
+    (e.g. the gateway-backed FE) that need to read memory across hosts.
+    """
+    if not isinstance(tenant_id, str) or not _TENANT_ID_RE.fullmatch(tenant_id):
+        return None
+    storage, bucket, key = _resolve_oss_target(tenant_id)
+    if storage is None or bucket is None or key is None:
+        return None
+    try:
+        body = storage.get_object_bytes(bucket, key)
+    except Exception as exc:  # noqa: BLE001 — OSS read is best-effort
+        logger.debug("memory: OSS get_object failed for tenant %r: %s", tenant_id, exc)
+        return None
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning("memory: OSS body not valid JSON for tenant %r: %s", tenant_id, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _mirror_memory_to_oss(tenant_id: str, payload: bytes) -> None:
+    """Best-effort upload of the freshly-written memory document to OSS."""
+    storage, bucket, key = _resolve_oss_target(tenant_id)
+    if storage is None or bucket is None or key is None:
+        return
+    try:
+        storage.put_object(
+            bucket,
+            key,
+            io.BytesIO(payload),
+            content_type=_OSS_CONTENT_TYPE,
+        )
+    except Exception as exc:  # noqa: BLE001 — sync is best-effort
+        logger.warning("memory: OSS mirror failed for tenant %r: %s", tenant_id, exc)
+
+
+def _resolve_oss_target(tenant_id: str) -> tuple[Any, str | None, str | None]:
+    """Return ``(storage, bucket, key)`` or ``(None, None, None)`` when OSS
+    isn't configured. Lazy imports keep this module testable without
+    pulling oss2 at module-load time."""
+    try:
+        from src.storage import oss_client as oss_module
+        from src.storage.keys import tenant_memory_key
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("memory: storage module unavailable (%s)", exc)
+        return None, None, None
+    try:
+        storage = oss_module.get_default()
+    except Exception as exc:  # noqa: BLE001 — config missing is fine
+        logger.debug("memory: OSS not configured (%s)", exc)
+        return None, None, None
+    bucket = getattr(getattr(storage, "config", None), "chat_bucket", None) or "trademind-chat-session"
+    return storage, bucket, tenant_memory_key(tenant_id)

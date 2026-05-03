@@ -113,3 +113,14 @@ def tenant_profile_key(tenant_id: int | str) -> str:
     settings page. Object versioning at the bucket level keeps history.
     """
     return f"{tenant_prefix(tenant_id)}profile/profile.json"
+
+
+def tenant_memory_key(tenant_id: int | str) -> str:
+    """Object key for the live ``memory.json`` (`trademind-chat-session`).
+
+    Single canonical object per tenant. DeerFlow's memory updater is the
+    primary writer (after every debounced LLM update); the file is also
+    writable from the gateway / FE for manual edits. OSS bucket versioning
+    is the system of record for history.
+    """
+    return f"{tenant_prefix(tenant_id)}memory/memory.json"

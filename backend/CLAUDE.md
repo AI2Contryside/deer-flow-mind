@@ -292,6 +292,12 @@ Bridges external messaging platforms (Feishu, Slack, Telegram) to the DeerFlow a
 4. Applies updates atomically (temp file + rename) with cache invalidation
 5. Next interaction injects top 15 facts + context into `<memory>` tags in system prompt
 
+**OSS double-write** (`src/agents/memory/storage.py`):
+- Every successful local write through `write_memory(tenant_id, data)` is mirrored to Aliyun OSS bucket `trademind-chat-session` at `tenants/<tenant_id>/memory/memory.json` (key built by `tenant_memory_key`).
+- `read_memory(tenant_id)` reads the local cache first; on a miss it falls back to OSS via `read_memory_from_oss` and replicates the result locally so subsequent reads stay on the hot path. This is what lets a freshly-rebuilt container recover a tenant's memory without losing facts.
+- Best-effort throughout: OSS upload/read failures are logged and swallowed — the local file remains source of truth for the agent's hot path. Invalid tenant ids (failing `[A-Za-z0-9_-]{1,64}`) are rejected before touching OSS.
+- `read_memory_from_oss` is exported for cross-host consumers (e.g. trademind-backend's gateway serving the FE settings page) that need the canonical memory document without reaching into DeerFlow's filesystem.
+
 **Configuration** (`config.yaml` → `memory`):
 - `enabled` / `injection_enabled` - Master switches
 - `storage_path` - Path to memory.json
