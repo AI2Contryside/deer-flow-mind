@@ -21,7 +21,7 @@ from uuid import UUID
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 
-from src.storage.token_usage import TokenUsageRecord, record_usage
+from src.storage.token_usage import TokenUsageRecord, get_run_metadata, record_usage
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +160,15 @@ class TokenUsageRecorder(BaseCallbackHandler):
             meta = metadata or self._pending.pop(run_id, None) or {}
             session_id = meta.get("session_id") or meta.get("thread_id")
             turn_id = meta.get("turn_id")
+            if not session_id or not turn_id:
+                # Fall back to the per-run contextvar that ``make_lead_agent``
+                # binds. This catches OCR tool / title middleware / ad-hoc
+                # ``model.invoke`` sites where LangChain's RunnableConfig
+                # propagation does not surface the metadata in time.
+                ctx_meta = get_run_metadata()
+                if ctx_meta:
+                    session_id = session_id or ctx_meta.get("session_id")
+                    turn_id = turn_id or ctx_meta.get("turn_id")
             if not session_id or not turn_id:
                 return
             fallback_model = meta.get("model_name") or meta.get("model")

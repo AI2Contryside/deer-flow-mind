@@ -402,6 +402,17 @@ def make_lead_agent(config: RunnableConfig):
         }
     )
 
+    # Bind the same correlation pair into a ContextVar so any LLM call that
+    # bypasses LangChain's RunnableConfig propagation (OCR tool's direct
+    # ``model.invoke``, title middleware's ``ainvoke``, future ad-hoc sites)
+    # can still attribute its tokens to this turn. asyncio child tasks
+    # inherit the current Context, so every LangGraph node spawned for this
+    # run sees the same value.
+    if session_id and turn_id:
+        from src.storage.token_usage import set_run_metadata
+
+        set_run_metadata(session_id=session_id, turn_id=turn_id)
+
     if is_bootstrap:
         # Special bootstrap agent with minimal prompt for initial custom agent creation flow
         system_prompt = apply_prompt_template(

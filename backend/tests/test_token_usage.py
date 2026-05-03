@@ -127,6 +127,8 @@ def test_callback_skips_when_correlation_metadata_missing(monkeypatch: pytest.Mo
 
     captured: list[Any] = []
     monkeypatch.setattr(cb_mod, "record_usage", captured.append)
+    # Make sure the contextvar fallback is empty so we exercise the skip path.
+    monkeypatch.setattr(cb_mod, "get_run_metadata", lambda: None)
 
     handler = TokenUsageRecorder()
     handler.on_llm_end(
@@ -136,6 +138,34 @@ def test_callback_skips_when_correlation_metadata_missing(monkeypatch: pytest.Mo
     )
 
     assert captured == []
+
+
+def test_callback_falls_back_to_run_metadata_contextvar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When invoke's config doesn't carry session_id/turn_id, the callback
+    must read the per-run ContextVar that make_lead_agent populated.
+    """
+    from src.storage import token_usage as token_usage_mod
+    from src.storage import token_usage_callback as cb_mod
+    from src.storage.token_usage_callback import TokenUsageRecorder
+
+    captured: list[Any] = []
+    monkeypatch.setattr(cb_mod, "record_usage", captured.append)
+
+    token = token_usage_mod.set_run_metadata(session_id="thread-CV", turn_id="turn-CV")
+    try:
+        handler = TokenUsageRecorder()
+        handler.on_llm_end(
+            _make_result(model="qwen-vl-max-latest", input_tokens=12, output_tokens=3),
+            run_id=uuid4(),
+            metadata={},  # invoke config did not propagate metadata
+        )
+
+        assert len(captured) == 1
+        assert captured[0].session_id == "thread-CV"
+        assert captured[0].turn_id == "turn-CV"
+        assert captured[0].model == "qwen-vl-max-latest"
+    finally:
+        token_usage_mod._RUN_METADATA.reset(token)
 
 
 def test_callback_recovers_metadata_stashed_at_start(monkeypatch: pytest.MonkeyPatch) -> None:

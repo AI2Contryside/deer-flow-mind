@@ -23,6 +23,7 @@ Design notes
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import queue
@@ -33,6 +34,46 @@ from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Per-run correlation contextvar
+# ---------------------------------------------------------------------------
+#
+# LangGraph propagates a RunnableConfig down the runnable chain, but inside a
+# tool node ``runtime.config`` and ``var_child_runnable_config`` are scoped to
+# the tool's child config — the parent agent's metadata stamp does NOT reliably
+# survive the hop. We need a propagation channel that the OCR tool, the title
+# middleware, and any other ad-hoc ``model.invoke()`` site can rely on.
+#
+# A plain ``contextvars.ContextVar`` works because asyncio tasks copy the
+# current Context at task creation time. ``make_lead_agent`` runs once per
+# LangGraph run inside the worker task; setting the contextvar there means
+# every child task spawned for that run (model nodes, tool nodes, middleware
+# hooks, the title-generation ainvoke) inherits the same value.
+#
+# Stored value: ``{"session_id": str, "turn_id": str}`` — the same shape the
+# recorder consumes from ``RunnableConfig["metadata"]``.
+
+_RUN_METADATA: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "deer_flow_token_usage_run_metadata",
+    default=None,
+)
+
+
+def set_run_metadata(*, session_id: str, turn_id: str) -> contextvars.Token:
+    """Bind the current run's correlation metadata into the contextvar.
+
+    Returns the ``Token`` so callers can ``reset()`` if they need stack-like
+    semantics; in practice ``make_lead_agent`` sets it once per run and
+    doesn't reset (the Context dies with the task).
+    """
+    return _RUN_METADATA.set({"session_id": session_id, "turn_id": turn_id})
+
+
+def get_run_metadata() -> dict[str, str] | None:
+    """Return the bound run metadata for the current async task, or None."""
+    return _RUN_METADATA.get()
 
 
 def background_invoke_config(source: str, key: str) -> dict[str, Any]:
