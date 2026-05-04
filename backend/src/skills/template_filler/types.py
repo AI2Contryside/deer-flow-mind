@@ -38,21 +38,18 @@ class ExtractedField(BaseModel):
 
     name: str = Field(
         ...,
-        description="snake_case identifier used as the jinja variable name. "
-        "Must be a bare identifier (no dots, no operators).",
+        description="snake_case identifier used as the jinja variable name. Must be a bare identifier (no dots, no operators).",
     )
     label: str = Field(..., description="Chinese display label for the form UI.")
     type: FieldType = FieldType.STRING
     required: bool = True
     original_text: str = Field(
         ...,
-        description="Verbatim placeholder text in the source template. Used "
-        "by the jinja-rewriter to know what to substitute.",
+        description="Verbatim placeholder text in the source template. Used by the jinja-rewriter to know what to substitute.",
     )
     location_hint: str | None = Field(
         default=None,
-        description="Where the LLM saw the field, for the review UI: "
-        '"B3" (xlsx cell address), "段落 4" (docx paragraph index), or free text.',
+        description='Where the LLM saw the field, for the review UI: "B3" (xlsx cell address), "段落 4" (docx paragraph index), or free text.',
     )
     description: str | None = Field(
         default=None,

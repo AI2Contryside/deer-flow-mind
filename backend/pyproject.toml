@@ -23,6 +23,11 @@ dependencies = [
     "docling>=2.0.0",
     "python-calamine>=0.2.3",
     "python-docx>=1.1.0",
+    # Jinja-style template rendering for the fill_template tool. docxtpl
+    # for .docx (full jinja, including tables / loops); xltpl for .xlsx
+    # (preserves cell styles / formulas while substituting tags).
+    "docxtpl>=0.20.1",
+    "xltpl>=0.20",
     "pydantic>=2.12.5",
     "python-multipart>=0.0.20",
     "pyyaml>=6.0.3",

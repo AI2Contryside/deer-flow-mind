@@ -43,8 +43,7 @@ class LLMCallable(Protocol):
     LangChain APIs collapse to this in production via a small wrapper.
     """
 
-    def __call__(self, system_prompt: str, user_prompt: str) -> str:
-        ...
+    def __call__(self, system_prompt: str, user_prompt: str) -> str: ...
 
 
 def _scan_by_extension(file_bytes: bytes, file_name: str) -> tuple[list[TextFragment], str | None]:
@@ -121,15 +120,11 @@ def extract_fields(
         )
         return ExtractionResult(fields=[], warnings=warnings)
     if not fragments:
-        warnings.append(
-            ExtractionWarning(code="no_text_extracted", message="未提取到任何可见文本")
-        )
+        warnings.append(ExtractionWarning(code="no_text_extracted", message="未提取到任何可见文本"))
         return ExtractionResult(fields=[], warnings=warnings)
 
     # Stub LLM if none provided. Useful for tests of the scan-only path.
-    llm: Callable[[str, str], str] = (
-        llm_callable if llm_callable is not None else (lambda _s, _u: "[]")
-    )
+    llm: Callable[[str, str], str] = llm_callable if llm_callable is not None else (lambda _s, _u: "[]")
 
     all_fields: list[ExtractedField] = []
     parse_failed_chunks = 0
@@ -139,9 +134,7 @@ def extract_fields(
             reply = llm(SYSTEM_PROMPT, user_msg)
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM call failed for chunk: %s", exc, exc_info=True)
-            warnings.append(
-                ExtractionWarning(code="llm_call_failed", message=str(exc))
-            )
+            warnings.append(ExtractionWarning(code="llm_call_failed", message=str(exc)))
             continue
         fields, err = parse_llm_reply(reply)
         if err:

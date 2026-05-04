@@ -38,9 +38,7 @@ class RenderResult:
     content_type: str
 
 
-def render_for_extension(
-    file_name: str, jinja_bytes: bytes, data: dict
-) -> RenderResult:
+def render_for_extension(file_name: str, jinja_bytes: bytes, data: dict) -> RenderResult:
     """Pick the right renderer by extension and render.
 
     Raises:

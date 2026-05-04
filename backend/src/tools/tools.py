@@ -7,6 +7,7 @@ from src.reflection import resolve_variable
 from src.tools.builtins import (
     ask_clarification_tool,
     extract_trade_document_tool,
+    fill_template_tool,
     present_file_tool,
     task_tool,
     view_image_tool,
@@ -23,6 +24,10 @@ BUILTIN_TOOLS = [
     present_file_tool,
     ask_clarification_tool,
     extract_trade_document_tool,
+    # fill_template is conditioned at runtime on `selected_template` being
+    # present in ThreadState — no model-feature gate needed. The tool no-ops
+    # gracefully (with an Error message) when state is missing it.
+    fill_template_tool,
 ]
 
 SUBAGENT_TOOLS = [

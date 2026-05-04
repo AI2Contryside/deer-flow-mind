@@ -62,9 +62,7 @@ def fill_template_bytes(
     try:
         return render_for_extension(output_name, jinja_bytes, data)
     except ImportError as exc:
-        raise TemplateFillError(
-            f"renderer dependency missing for {output_name}: {exc}"
-        ) from exc
+        raise TemplateFillError(f"renderer dependency missing for {output_name}: {exc}") from exc
     except RendererError as exc:
         raise TemplateFillError(str(exc)) from exc
     except ValueError as exc:

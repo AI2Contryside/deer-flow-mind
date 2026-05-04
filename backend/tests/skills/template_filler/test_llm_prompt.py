@@ -54,11 +54,7 @@ def test_parse_strips_markdown_fence():
 
 
 def test_parse_recovers_array_from_chatty_reply():
-    raw = (
-        "好的,我识别到 1 个字段:\n\n"
-        '[{"name":"客户名","label":"客户","type":"string","required":true,"original_text":"[客户]"}]'
-        "\n\n以上是结果。"
-    )
+    raw = '好的,我识别到 1 个字段:\n\n[{"name":"客户名","label":"客户","type":"string","required":true,"original_text":"[客户]"}]\n\n以上是结果。'
     fields, err = parse_llm_reply(raw)
     assert err is None
     assert len(fields) == 1

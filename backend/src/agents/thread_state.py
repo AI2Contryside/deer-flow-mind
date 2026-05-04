@@ -79,3 +79,21 @@ class ThreadState(AgentState):
     todos: NotRequired[list | None]
     uploaded_files: NotRequired[list[dict] | None]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]  # image_path -> {base64, mime_type}
+    # Template selected by the user for the next turn (or sticky for the
+    # whole session, depending on FE behaviour). Carries enough metadata
+    # for fill_template tool to download the jinja-tagged file and the
+    # field schema without re-querying user_service.
+    #
+    # Shape (when present):
+    #   {
+    #     "template_id":            str,
+    #     "name":                   str,        # display filename (e.g. "采购订单模板.xlsx")
+    #     "type":                   str,        # business type, e.g. "excel"
+    #     "jinja_download_url":     str,        # short-TTL signed URL (sys bucket)
+    #     "fields":                 list[dict], # {name, label, type, required, ...}
+    #   }
+    #
+    # Injected by the gateway when chat_stream sees a non-null
+    # `selected_template` in the request body. Cleared / overridden on
+    # subsequent turns based on FE intent.
+    selected_template: NotRequired[dict | None]

@@ -37,9 +37,7 @@ def test_render_for_extension_rejects_unknown():
 def test_alternate_openpyxl_substitutes_simple_tags():
     """The standalone openpyxl renderer (no xltpl needed) does scalar substitution."""
     src = _make_xlsx_with_jinja_tags()
-    rendered = _alternate_render_with_openpyxl(
-        src, {"customer_name": "Acme Hardware", "amount": 12345}
-    )
+    rendered = _alternate_render_with_openpyxl(src, {"customer_name": "Acme Hardware", "amount": 12345})
 
     wb = openpyxl.load_workbook(io.BytesIO(rendered))
     ws = wb.active
@@ -83,9 +81,7 @@ def test_render_xlsx_via_dispatch_when_xltpl_missing_raises_importerror():
         pass
 
     with pytest.raises(ImportError, match="xltpl"):
-        render_for_extension(
-            "template.xlsx", _make_xlsx_with_jinja_tags(), {"customer_name": "X"}
-        )
+        render_for_extension("template.xlsx", _make_xlsx_with_jinja_tags(), {"customer_name": "X"})
 
 
 def test_render_docx_when_docxtpl_missing_raises_importerror():

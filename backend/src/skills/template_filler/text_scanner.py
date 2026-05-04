@@ -96,9 +96,7 @@ def scan_xlsx(file: bytes | IO[bytes]) -> list[TextFragment]:
     return out
 
 
-def chunk_for_prompt(
-    fragments: list[TextFragment], max_chars: int = 8000
-) -> Iterator[list[TextFragment]]:
+def chunk_for_prompt(fragments: list[TextFragment], max_chars: int = 8000) -> Iterator[list[TextFragment]]:
     """Split fragments into batches the LLM can comfortably ingest.
 
     `max_chars` is a soft budget on the joined "text + hint" payload per

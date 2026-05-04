@@ -31,10 +31,7 @@ def render(jinja_bytes: bytes, data: dict[str, Any]) -> bytes:
     try:
         from docxtpl import DocxTemplate
     except ImportError as exc:  # noqa: BLE001
-        raise ImportError(
-            "docxtpl is required to render .docx templates. "
-            "Install with: uv add docxtpl"
-        ) from exc
+        raise ImportError("docxtpl is required to render .docx templates. Install with: uv add docxtpl") from exc
 
     from src.skills.template_filler.renderers.base import RendererError
 

@@ -88,9 +88,7 @@ def test_extract_dedupe_across_chunks():
 
     def stub_llm(_system: str, _user: str) -> str:
         seen_calls["n"] += 1
-        return json.dumps(
-            [{"name": "customer_name", "label": "客户", "original_text": "[客户名]"}]
-        )
+        return json.dumps([{"name": "customer_name", "label": "客户", "original_text": "[客户名]"}])
 
     result = extract_fields(_make_simple_docx(), "po.docx", llm_callable=stub_llm)
     # Even if multiple chunks each return the same field, output is unique.
@@ -121,9 +119,7 @@ def test_extract_xlsx_works_via_same_pipeline():
     """Smoke test that the xlsx path doesn't blow up downstream."""
 
     def stub_llm(_s: str, _u: str) -> str:
-        return json.dumps(
-            [{"name": "customer_name", "label": "客户", "original_text": "[客户名]"}]
-        )
+        return json.dumps([{"name": "customer_name", "label": "客户", "original_text": "[客户名]"}])
 
     result = extract_fields(_make_simple_xlsx(), "po.xlsx", llm_callable=stub_llm)
     assert len(result.fields) == 1

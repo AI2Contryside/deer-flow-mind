@@ -29,10 +29,7 @@ def render(jinja_bytes: bytes, data: dict[str, Any]) -> bytes:
     try:
         from xltpl.writer import BookWriter
     except ImportError as exc:  # noqa: BLE001
-        raise ImportError(
-            "xltpl is required to render .xlsx templates. "
-            "Install with: uv add xltpl"
-        ) from exc
+        raise ImportError("xltpl is required to render .xlsx templates. Install with: uv add xltpl") from exc
 
     from src.skills.template_filler.renderers.base import RendererError
 
@@ -97,7 +94,7 @@ def _alternate_render_with_openpyxl(jinja_bytes: bytes, data: dict[str, Any]) ->
     pattern = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
     def substitute(text: str) -> str:
-        def _repl(m: "re.Match[str]") -> str:
+        def _repl(m: re.Match[str]) -> str:
             key = m.group(1)
             val = data.get(key, m.group(0))
             return str(val) if val is not None else ""

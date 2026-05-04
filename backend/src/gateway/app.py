@@ -16,6 +16,7 @@ from src.gateway.routers import (
     onboarding,
     skills,
     suggestions,
+    templates,
     uploads,
 )
 from src.logctx import IdentityMiddleware, install_log_filter
@@ -187,6 +188,11 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Onboarding status API is mounted at /api/onboarding/status
     app.include_router(onboarding.router)
+
+    # Templates API is mounted at /api/template (extract_fields used by
+    # user_service during template upload to derive the AI-suggested
+    # field schema).
+    app.include_router(templates.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:

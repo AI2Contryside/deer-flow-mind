@@ -117,9 +117,7 @@ def test_scan_xlsx_skips_blank_cells():
 
 
 def test_chunk_for_prompt_respects_max_chars():
-    fragments = [
-        TextFragment(text="a" * 100, location_hint=f"loc{i}") for i in range(50)
-    ]
+    fragments = [TextFragment(text="a" * 100, location_hint=f"loc{i}") for i in range(50)]
     batches = list(chunk_for_prompt(fragments, max_chars=400))
 
     # Each batch's payload must stay under the budget (allow some slack

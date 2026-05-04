@@ -42,13 +42,13 @@ def test_fill_template_missing_dep_wraps_importerror():
     TemplateFillError — callers don't see ImportError leaking through."""
     try:
         import xltpl  # noqa: F401
+
         return  # xltpl present — this test isn't applicable
     except ImportError:
         pass
 
     try:
-        fill_template_bytes(_xlsx_with_tags([("客户:", "{{ customer }}")]),
-                            "out.xlsx", {"customer": "A"})
+        fill_template_bytes(_xlsx_with_tags([("客户:", "{{ customer }}")]), "out.xlsx", {"customer": "A"})
     except TemplateFillError as exc:
         assert "renderer dependency missing" in str(exc)
     else:
