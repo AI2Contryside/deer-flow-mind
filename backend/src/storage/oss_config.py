@@ -2,7 +2,10 @@
 
 Mirrors the Go-side `internal/oss/config.go` so object-key conventions and
 bucket assignments stay in lockstep across services. Secrets (AK/SK) come
-from environment variables only — never from yaml.
+from `oss.access_key_id` / `oss.access_key_secret` in yaml — typically
+rendered from a KMS Secrets Manager reference (kms://...) at config-load
+time. As a local-dev fallback the env vars ALIYUN_OSS_ACCESS_KEY_ID /
+_SECRET are still honoured when the yaml fields are empty.
 """
 
 from __future__ import annotations
@@ -57,8 +60,8 @@ def load_oss_config_from_dict(data: dict[str, Any]) -> OssConfig:
     max_upload = int(data.get("max_upload_bytes") or DEFAULT_MAX_UPLOAD_BYTES)
     avatar_max = int(data.get("avatar_max_bytes") or DEFAULT_AVATAR_MAX_BYTES)
 
-    ak = (os.getenv(ENV_ACCESS_KEY_ID) or "").strip()
-    sk = (os.getenv(ENV_ACCESS_KEY_SECRET) or "").strip()
+    ak = (data.get("access_key_id") or "").strip() or (os.getenv(ENV_ACCESS_KEY_ID) or "").strip()
+    sk = (data.get("access_key_secret") or "").strip() or (os.getenv(ENV_ACCESS_KEY_SECRET) or "").strip()
 
     missing: list[str] = []
     if not endpoint:
@@ -70,9 +73,9 @@ def load_oss_config_from_dict(data: dict[str, Any]) -> OssConfig:
     if not chat_bucket:
         missing.append("oss.chat_bucket")
     if not ak:
-        missing.append(f"env {ENV_ACCESS_KEY_ID}")
+        missing.append(f"oss.access_key_id (yaml or env {ENV_ACCESS_KEY_ID})")
     if not sk:
-        missing.append(f"env {ENV_ACCESS_KEY_SECRET}")
+        missing.append(f"oss.access_key_secret (yaml or env {ENV_ACCESS_KEY_SECRET})")
     if missing:
         raise ValueError(f"oss config incomplete: missing {', '.join(missing)}")
 

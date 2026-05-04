@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.config.checkpointer_config import CheckpointerConfig, load_checkpointer_config_from_dict
 from src.config.extensions_config import ExtensionsConfig
+from src.config.kms_loader import is_kms_ref, resolve_kms_value
 from src.config.memory_config import load_memory_config_from_dict
 from src.config.model_config import ModelConfig
 from src.config.next_step_config import load_next_step_config_from_dict
@@ -119,22 +120,34 @@ class AppConfig(BaseModel):
 
     @classmethod
     def resolve_env_variables(cls, config: Any) -> Any:
-        """Recursively resolve environment variables in the config.
+        """Recursively resolve environment variables and KMS references in the config.
 
-        Environment variables are resolved using the `os.getenv` function. Example: $OPENAI_API_KEY
+        Two reference forms are supported:
+
+        - ``$VAR_NAME``  -> resolved via ``os.getenv``. If the env value is itself
+          a ``kms://...`` reference (so .env can centralize secret routing),
+          it is then forwarded to the KMS resolver.
+        - ``kms://name`` -> resolved via ``src.config.kms_loader.resolve_kms_value``,
+          which calls Aliyun KMS Secrets Manager (cn-hangzhou) using the standard
+          credential chain (ECS RAM Role -> AK env -> ~/.aliyun). Set
+          ``KMS_ENABLED=false`` to fall back to plaintext-only mode for local dev.
 
         Args:
             config: The config to resolve environment variables in.
 
         Returns:
-            The config with environment variables resolved.
+            The config with environment variables and KMS references resolved.
         """
         if isinstance(config, str):
             if config.startswith("$"):
                 env_value = os.getenv(config[1:])
                 if env_value is None:
                     raise ValueError(f"Environment variable {config[1:]} not found for config value {config}")
+                if is_kms_ref(env_value):
+                    return resolve_kms_value(env_value)
                 return env_value
+            if is_kms_ref(config):
+                return resolve_kms_value(config)
             return config
         elif isinstance(config, dict):
             return {k: cls.resolve_env_variables(v) for k, v in config.items()}

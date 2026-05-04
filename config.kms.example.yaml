@@ -1,0 +1,88 @@
+# Production-style config.yaml fragment for deer-flow-mind backed by Aliyun
+# KMS Secrets Manager.
+#
+# This file shows ONLY the fields that change vs. config.example.yaml — copy
+# config.example.yaml to config.yaml and overlay the snippets below for any
+# section you want to route through KMS.
+#
+# Two reference forms are supported by src/config/app_config.py:
+#
+#   $ENV_VAR     - resolved via os.getenv (existing behaviour). If the env
+#                  value is itself a kms:// reference (so .env can centralize
+#                  secret routing), it's then forwarded to the KMS resolver.
+#   kms://name   - resolved via src/config/kms_loader.py against KMS Secrets
+#                  Manager (cn-hangzhou shared gateway) using the standard
+#                  Aliyun credential chain (ECS RAM Role -> AK env -> ~/.aliyun).
+#
+# To deploy:
+#   1. Create the KMS secrets via scripts/kms/create_secrets.sh.
+#   2. Ensure the host's RAM role grants kms:GetSecretValue on those secrets.
+#   3. KMS_ENABLED=true (default), KMS_REGION=cn-hangzhou.
+#
+# IM channels (Feishu/Slack/Telegram), LangSmith, and MCP OAuth are NOT routed
+# through KMS — keep them plaintext (or via $ENV_VAR) per ops decision.
+
+# ----------------------------------------------------------------------------
+# LLM models — replace `$XXX_API_KEY` with kms:// where applicable. The two
+# forms can coexist; existing $ENV_VAR refs continue to work and, when the
+# corresponding env value happens to start with `kms://`, are auto-forwarded
+# to the KMS resolver.
+# ----------------------------------------------------------------------------
+models:
+  - name: dashscope-vl
+    api_key: kms://deerflow/dashscope-api-key
+  - name: deepseek-chat
+    api_key: kms://deerflow/deepseek-api-key
+  - name: openai-gpt
+    api_key: kms://deerflow/openai-api-key
+  - name: anthropic-claude
+    api_key: kms://deerflow/anthropic-api-key
+  - name: gemini
+    api_key: kms://deerflow/gemini-api-key
+    google_api_key: kms://deerflow/gemini-api-key
+  - name: doubao
+    api_key: kms://deerflow/volcengine-api-key
+  - name: novita
+    api_key: kms://deerflow/novita-api-key
+  - name: moonshot
+    api_key: kms://deerflow/moonshot-api-key
+
+# ----------------------------------------------------------------------------
+# Search / web fetch tools
+# ----------------------------------------------------------------------------
+tools:
+  - name: tavily_search
+    api_key: kms://deerflow/tavily-api-key
+  - name: jina_fetch
+    api_key: kms://deerflow/jina-api-key
+  - name: infoquest_search
+    api_key: kms://deerflow/infoquest-api-key
+  - name: firecrawl_scrape
+    api_key: kms://deerflow/firecrawl-api-key
+
+# ----------------------------------------------------------------------------
+# Checkpointer (LangGraph state persistence)
+# ----------------------------------------------------------------------------
+checkpointer:
+  type: postgres
+  connection_string: kms://deerflow/checkpointer-pg-dsn
+
+# ----------------------------------------------------------------------------
+# Aliyun OSS — AK/SK pulled from KMS in production. Env vars
+# ALIYUN_OSS_ACCESS_KEY_ID / _SECRET remain a local-dev fallback.
+# ----------------------------------------------------------------------------
+oss:
+  endpoint: oss-cn-hangzhou.aliyuncs.com
+  region: cn-hangzhou
+  sys_bucket: trademind-sys
+  chat_bucket: trademind-chat-session
+  access_key_id: kms://deerflow/aliyun-oss-ak
+  access_key_secret: kms://deerflow/aliyun-oss-sk
+
+# ----------------------------------------------------------------------------
+# Tenant-profile ERPNext client — token routes through KMS.
+# (See backend/docs/TENANT_PROFILE_DESIGN.md.)
+# ----------------------------------------------------------------------------
+tenant_profile:
+  facts:
+    erpnext_token: kms://deerflow/erpnext-token
