@@ -135,6 +135,13 @@ async def _kickoff_run(
 
     runtime_context: dict[str, Any] = {
         "task_type": "template_extraction",
+        # ThreadDataMiddleware reads thread_id from runtime.context to
+        # locate the per-thread sandbox dirs. langgraph_sdk's runs.create
+        # path-encodes thread_id in the URL but doesn't auto-inject it
+        # into context, so middleware would otherwise raise
+        # "Thread ID is required in the context" before the agent's
+        # first turn.
+        "thread_id": thread_id,
         # Extraction never wants the thinking trace — keep parity with
         # the profile's resolve_model.
         "thinking_enabled": False,
