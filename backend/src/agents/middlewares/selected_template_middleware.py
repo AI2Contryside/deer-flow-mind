@@ -1,4 +1,4 @@
-"""Inject ``<selected_template>`` context into the last HumanMessage.
+"""Inject ``<selected_template>`` context as a SystemMessage.
 
 The gateway populates ``state.selected_template`` (a dict carrying
 ``template_id``, ``name``, ``type``, ``jinja_download_url``, ``fields``)
@@ -8,24 +8,38 @@ agent itself* only ever sees the user's text — without an injected
 context block, the model has no idea "这个模板" refers to anything
 specific and asks the user "which template?" on every turn.
 
-This middleware closes that gap with the same shape as
-``UploadsMiddleware``: on ``before_agent``, look at state, render a
-prompt block, prepend it to the latest HumanMessage. Idempotent — if
-the block is already present (mid-turn retry / resume), we skip
-re-prepending so the message text stays clean.
+This middleware closes that gap by appending a SystemMessage carrying a
+``<selected_template>`` block to the message stream. The LangGraph
+``add_messages`` reducer dedupes by message id, so re-emitting on every
+turn with the same fixed id is a no-op (the existing copy stays). The
+FE's chat stream handler (``api.ts::chatStream``) only renders
+``type=ai`` and ``type=tool`` partials, so SystemMessage content stays
+out of the user-visible bubble — exactly what we want for prompt
+plumbing.
+
+Why not modify the user's HumanMessage? Mutating ``HumanMessage.content``
+to prepend the block also leaks it to the FE: the user-message renderer
+shows whatever sits in ``content`` verbatim. SystemMessage is the
+correct shape for "context the LLM sees, the user shouldn't."
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, NotRequired, override
+from typing import NotRequired, override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import SystemMessage
 from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
+
+# Stable id so add_messages dedupes the SystemMessage across turns. If a
+# user switches templates mid-thread, the dict content changes but the id
+# stays — add_messages then *replaces* the prior copy with the new one,
+# matching what we want (one live block reflecting the current state).
+_SYSTEM_MESSAGE_ID = "__selected_template_block__"
 
 _BLOCK_OPEN = "<selected_template>"
 _BLOCK_CLOSE = "</selected_template>"
@@ -38,7 +52,7 @@ class SelectedTemplateMiddlewareState(AgentState):
 
 
 class SelectedTemplateMiddleware(AgentMiddleware[SelectedTemplateMiddlewareState]):
-    """Inject ``<selected_template>`` block before each lead-agent turn."""
+    """Inject ``<selected_template>`` SystemMessage before each lead-agent turn."""
 
     state_schema = SelectedTemplateMiddlewareState
 
@@ -50,53 +64,15 @@ class SelectedTemplateMiddleware(AgentMiddleware[SelectedTemplateMiddlewareState
         if not selected or not isinstance(selected, dict):
             return None
 
-        messages = list(state.get("messages", []))
-        if not messages:
-            return None
-
-        last_idx = self._find_last_human_message_index(messages)
-        if last_idx is None:
-            return None
-
-        last = messages[last_idx]
-        original_content = self._extract_text(last.content)
-
-        # Idempotent: don't re-prepend on retry / resume.
-        if _BLOCK_OPEN in original_content:
-            return None
-
         block = self._render_block(selected)
-        updated = HumanMessage(
-            content=f"{block}\n\n{original_content}",
-            id=last.id,
-            additional_kwargs=last.additional_kwargs,
-        )
-        messages[last_idx] = updated
+        message = SystemMessage(content=block, id=_SYSTEM_MESSAGE_ID)
+
         logger.debug(
             "selected_template injected: template_id=%s fields=%d",
             selected.get("template_id"),
             len(selected.get("fields") or []),
         )
-        return {"messages": messages}
-
-    @staticmethod
-    def _find_last_human_message_index(messages: list[Any]) -> int | None:
-        for i in range(len(messages) - 1, -1, -1):
-            if isinstance(messages[i], HumanMessage):
-                return i
-        return None
-
-    @staticmethod
-    def _extract_text(content: Any) -> str:
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts: list[str] = []
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    parts.append(str(block.get("text", "")))
-            return "\n".join(parts)
-        return ""
+        return {"messages": [message]}
 
     @staticmethod
     def _render_block(selected: dict) -> str:

@@ -1,18 +1,21 @@
 """Behaviour tests for SelectedTemplateMiddleware.
 
-We assert the middleware is a thin "read state → prepend block" shim:
-no I/O, no network, no fancy state mutations beyond messages.
+We assert the middleware is a thin "read state → emit SystemMessage" shim:
+no I/O, no network, no HumanMessage mutation (which would leak the prompt
+block to the FE).
 """
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.agents.middlewares.selected_template_middleware import (
     SelectedTemplateMiddleware,
 )
+
+_FIXED_ID = "__selected_template_block__"
 
 
 def _runtime() -> MagicMock:
@@ -31,22 +34,13 @@ def test_returns_none_when_selected_template_missing():
     assert mw.before_agent(state, _runtime()) is None
 
 
-def test_returns_none_when_messages_empty():
+def test_returns_none_when_selected_template_not_a_dict():
     mw = SelectedTemplateMiddleware()
-    state = _state(selected={"template_id": "t_1"}, messages=[])
+    state = _state(selected="not-a-dict", messages=[HumanMessage(content="hi")])  # type: ignore[arg-type]
     assert mw.before_agent(state, _runtime()) is None
 
 
-def test_returns_none_when_no_human_message():
-    mw = SelectedTemplateMiddleware()
-    state = _state(
-        selected={"template_id": "t_1"},
-        messages=[AIMessage(content="answer")],
-    )
-    assert mw.before_agent(state, _runtime()) is None
-
-
-def test_injects_block_with_template_metadata():
+def test_emits_system_message_with_block():
     mw = SelectedTemplateMiddleware()
     user_text = "根据这个模板生成员工档案"
     state = _state(
@@ -56,42 +50,42 @@ def test_injects_block_with_template_metadata():
             "type": "excel",
             "fields": [
                 {"name": "name", "label": "姓名", "type": "string", "required": True},
-                {"name": "department", "label": "部门", "type": "string", "required": False, "description": "员工所属部门"},
+                {"name": "department", "label": "部门", "required": False, "description": "员工所属部门"},
             ],
         },
         messages=[HumanMessage(content=user_text)],
     )
     result = mw.before_agent(state, _runtime())
     assert result is not None
-    new_msgs = result["messages"]
-    assert len(new_msgs) == 1
-    new_text = new_msgs[0].content
-    # Block opens / closes correctly.
-    assert new_text.startswith("<selected_template>")
-    assert "</selected_template>" in new_text
-    # Original user text preserved at the end.
-    assert new_text.endswith(user_text)
-    # Metadata + fields rendered.
-    assert "tpl_abc" in new_text
-    assert "员工信息.xlsx" in new_text
-    assert "`name`" in new_text and "姓名" in new_text
-    assert "`department`" in new_text and "员工所属部门" in new_text
+    out = result["messages"]
+    assert len(out) == 1
+    sysmsg = out[0]
+    assert isinstance(sysmsg, SystemMessage), "must be SystemMessage so the FE doesn't render it"
+    assert sysmsg.id == _FIXED_ID, "stable id is what makes add_messages dedupe across turns"
+    text = sysmsg.content
+    assert text.startswith("<selected_template>")
+    assert text.endswith("</selected_template>")
+    assert "tpl_abc" in text
+    assert "员工信息.xlsx" in text
+    assert "`name`" in text and "姓名" in text
+    assert "`department`" in text and "员工所属部门" in text
 
 
-def test_idempotent_when_block_already_in_message():
-    """Resume / retry path: block exists, don't double-prepend."""
+def test_does_not_touch_existing_messages():
+    """Returned dict only contains the new SystemMessage — never mutates user input."""
     mw = SelectedTemplateMiddleware()
-    seeded = (
-        "<selected_template>\n"
-        "用户已选模板 …\n"
-        "</selected_template>\n\n"
-        "原始用户消息"
-    )
+    user_text = "原始用户消息"
     state = _state(
         selected={"template_id": "tpl_abc", "name": "x"},
-        messages=[HumanMessage(content=seeded)],
+        messages=[HumanMessage(content=user_text)],
     )
-    assert mw.before_agent(state, _runtime()) is None
+    result = mw.before_agent(state, _runtime())
+    assert result is not None
+    # Returned messages list contains ONLY the new SystemMessage. The
+    # original HumanMessage stays untouched in state because the
+    # add_messages reducer keeps both — we never re-emit the user message.
+    assert len(result["messages"]) == 1
+    assert isinstance(result["messages"][0], SystemMessage)
 
 
 def test_handles_empty_fields_with_explicit_warning():
@@ -103,11 +97,11 @@ def test_handles_empty_fields_with_explicit_warning():
     result = mw.before_agent(state, _runtime())
     assert result is not None
     text = result["messages"][0].content
-    # Empty fields path renders a fallback note, not the field list header.
     assert "fields 为空" in text or "未抽取" in text
 
 
-def test_finds_last_human_when_trailed_by_ai_message():
+def test_re_emits_with_same_id_for_dedup_across_turns():
+    """Multiple invocations all carry the same fixed id so add_messages dedupes."""
     mw = SelectedTemplateMiddleware()
     state = _state(
         selected={"template_id": "tpl_abc", "name": "x"},
@@ -115,35 +109,21 @@ def test_finds_last_human_when_trailed_by_ai_message():
             HumanMessage(content="第一轮"),
             AIMessage(content="回答"),
             HumanMessage(content="第二轮"),
-            AIMessage(content="另一个回答"),
         ],
     )
-    result = mw.before_agent(state, _runtime())
-    assert result is not None
-    msgs = result["messages"]
-    # Block prepended only on the latest HumanMessage (index 2).
-    assert "<selected_template>" not in msgs[0].content
-    assert "<selected_template>" in msgs[2].content
-    assert msgs[2].content.endswith("第二轮")
+    first = mw.before_agent(state, _runtime())
+    second = mw.before_agent(state, _runtime())
+    assert first is not None and second is not None
+    assert first["messages"][0].id == second["messages"][0].id == _FIXED_ID
 
 
-def test_handles_list_content_blocks():
-    """assistant-ui sometimes carries content as a list of typed blocks."""
+def test_handles_invalid_fields_shape_gracefully():
+    """Non-list `fields` value falls back to the empty-fields warning path."""
     mw = SelectedTemplateMiddleware()
     state = _state(
-        selected={"template_id": "tpl_abc", "name": "x"},
-        messages=[
-            HumanMessage(
-                content=[
-                    {"type": "text", "text": "第一段"},
-                    {"type": "text", "text": "第二段"},
-                ]
-            )
-        ],
+        selected={"template_id": "tpl_abc", "name": "x", "fields": "garbage"},
+        messages=[HumanMessage(content="x")],
     )
     result = mw.before_agent(state, _runtime())
     assert result is not None
-    text = result["messages"][0].content
-    assert "<selected_template>" in text
-    assert "第一段" in text
-    assert "第二段" in text
+    assert "fields 为空" in result["messages"][0].content or "未抽取" in result["messages"][0].content
