@@ -69,6 +69,13 @@ def scan_xlsx(file: bytes | IO[bytes]) -> list[TextFragment]:
     `data_only=False` is critical — we want the *formula or the literal*
     cell value, not a cached evaluated number. Sheets are scanned in
     workbook order; cells in row-major order within each sheet.
+
+    Each sheet emits one ``<sheet>!__overview__`` fragment up front
+    summarising row counts and the non-empty row numbers. That lets the
+    LLM detect "header row + many blank data rows" templates — without
+    the overview, the model only sees a handful of header cells in
+    isolation and can't tell whether row 2+ is blank or just absent
+    from the prompt.
     """
     if isinstance(file, bytes):
         file = io.BytesIO(file)
@@ -78,22 +85,109 @@ def scan_xlsx(file: bytes | IO[bytes]) -> list[TextFragment]:
     try:
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
+            cells: list[tuple[str, int, str]] = []  # (coord, row_idx, text)
+            non_empty_rows: set[int] = set()
+            max_row_seen = 0
             for row in ws.iter_rows():
                 for cell in row:
+                    # `EmptyCell` in read-only mode is a placeholder with no
+                    # row/coordinate attrs — getattr lets us count blanks
+                    # for max_row tracking without crashing.
+                    cell_row = getattr(cell, "row", None)
+                    if cell_row is not None:
+                        max_row_seen = max(max_row_seen, cell_row)
                     if cell.value is None:
                         continue
                     raw = str(cell.value).strip()
                     if not raw:
                         continue
-                    out.append(
-                        TextFragment(
-                            text=raw,
-                            location_hint=f"{sheet_name}!{cell.coordinate}",
-                        )
+                    cells.append((cell.coordinate, cell_row, raw))
+                    if cell_row is not None:
+                        non_empty_rows.add(cell_row)
+
+            if cells:
+                cells_per_row: dict[int, int] = {}
+                for _coord, row_idx, _text in cells:
+                    cells_per_row[row_idx] = cells_per_row.get(row_idx, 0) + 1
+                out.append(
+                    _build_overview_fragment(
+                        sheet_name=sheet_name,
+                        non_empty_rows=sorted(non_empty_rows),
+                        max_row_seen=max_row_seen,
+                        cells_per_row=cells_per_row,
                     )
+                )
+
+            for coord, _row, text in cells:
+                out.append(
+                    TextFragment(
+                        text=text,
+                        location_hint=f"{sheet_name}!{coord}",
+                    )
+                )
     finally:
         wb.close()
     return out
+
+
+def _build_overview_fragment(
+    sheet_name: str,
+    non_empty_rows: list[int],
+    max_row_seen: int,
+    cells_per_row: dict[int, int],
+) -> TextFragment:
+    """Render a structural summary the LLM can use to spot blank-row templates.
+
+    The text always lists non-empty row numbers; if the sheet looks like
+    "small header + lots of blank rows" we tag it explicitly so the LLM's
+    Mode B branch fires reliably (without this hint the model only ever
+    sees the header cells and can't distinguish a tiny sheet from a
+    blank-row entry form).
+
+    Two ways the "header + blank" pattern shows up in real templates:
+
+    1. Non-empty rows ≪ used rows — user once typed/cleared something
+       further down, so openpyxl's max_row reports a bigger number than
+       the rows actually carrying data right now.
+    2. Only one non-empty row exists at all — fresh template, openpyxl
+       didn't pad past the header. ``max_row_seen == 1`` but the LLM still
+       needs to know that "data is meant to go in row 2".
+
+    Both cases land on the same hint string: "rows N have content; data
+    should be filled starting from row N+1".
+    """
+    parts = [f'工作表 "{sheet_name}"', f"已使用至第 {max_row_seen} 行"]
+    if non_empty_rows:
+        rows_repr = ",".join(str(r) for r in non_empty_rows[:8])
+        if len(non_empty_rows) > 8:
+            rows_repr += f",…(共 {len(non_empty_rows)} 行)"
+        parts.append(f"有内容的行号: [{rows_repr}]")
+
+    if not non_empty_rows:
+        return TextFragment(text="; ".join(parts), location_hint=f"{sheet_name}!__overview__")
+
+    blank_rows = max_row_seen - len(non_empty_rows)
+    looks_like_header_form = False
+    if blank_rows >= 1 and len(non_empty_rows) <= 3:
+        # Pattern 1: blank gaps detected by openpyxl.
+        looks_like_header_form = True
+    elif len(non_empty_rows) == 1 and cells_per_row.get(non_empty_rows[0], 0) >= 2:
+        # Pattern 2: single row with ≥2 cells — typical "label row only" form.
+        looks_like_header_form = True
+
+    if looks_like_header_form:
+        first_blank = next(
+            (r for r in range(1, max(max_row_seen, non_empty_rows[-1]) + 2) if r not in non_empty_rows),
+            non_empty_rows[-1] + 1,
+        )
+        rows_str = ",".join(str(r) for r in non_empty_rows)
+        hint = (
+            f"⚠️ 结构提示: 第 {rows_str} 行有内容,其余行均为空白。"
+            f" 这通常是『列头 + 空白填充行』表单结构,数据应填入第 {first_blank} 行起。"
+        )
+        parts.append(hint)
+
+    return TextFragment(text="; ".join(parts), location_hint=f"{sheet_name}!__overview__")
 
 
 def chunk_for_prompt(fragments: list[TextFragment], max_chars: int = 8000) -> Iterator[list[TextFragment]]:

@@ -65,20 +65,34 @@ def _scan_by_extension(file_bytes: bytes, file_name: str) -> tuple[list[TextFrag
 
 
 def _dedupe_fields(fields: list[ExtractedField]) -> list[ExtractedField]:
-    """Drop later duplicates that share `name` or `original_text`.
+    """Drop later duplicates that share name, original_text, or cell_anchor.
 
     Multi-batch extraction can produce overlapping fields when adjacent
     chunks see the same text. We keep the first occurrence so order is
     preserved for the review UI.
+
+    Important: only treat a key as "seen" when it's non-empty. Mode B
+    (header-cell) fields share original_text="" by design — keying off
+    that would collapse every header column into a single field. We dedupe
+    on whichever target the field actually has (cell_anchor or
+    original_text), plus name as a hard uniqueness guard.
     """
     seen_names: set[str] = set()
     seen_originals: set[str] = set()
+    seen_anchors: set[str] = set()
     out: list[ExtractedField] = []
     for f in fields:
-        if f.name in seen_names or f.original_text in seen_originals:
+        if f.name in seen_names:
+            continue
+        if f.original_text and f.original_text in seen_originals:
+            continue
+        if f.cell_anchor and f.cell_anchor in seen_anchors:
             continue
         seen_names.add(f.name)
-        seen_originals.add(f.original_text)
+        if f.original_text:
+            seen_originals.add(f.original_text)
+        if f.cell_anchor:
+            seen_anchors.add(f.cell_anchor)
         out.append(f)
     return out
 

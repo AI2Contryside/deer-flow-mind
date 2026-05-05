@@ -113,7 +113,70 @@ def test_scan_xlsx_walks_all_sheets_in_order():
 def test_scan_xlsx_skips_blank_cells():
     raw = _make_xlsx({"S": [["a", None, "b"], [None, None, None], ["c"]]})
     out = scan_xlsx(raw)
-    assert sorted(f.text for f in out) == ["a", "b", "c"]
+    cell_texts = [f.text for f in out if not f.location_hint.endswith("!__overview__")]
+    assert sorted(cell_texts) == ["a", "b", "c"]
+
+
+def test_scan_xlsx_emits_overview_per_sheet():
+    raw = _make_xlsx({"S1": [["a", "b"]], "S2": [["c"]]})
+    out = scan_xlsx(raw)
+    overviews = [f for f in out if f.location_hint.endswith("!__overview__")]
+    assert {f.location_hint for f in overviews} == {"S1!__overview__", "S2!__overview__"}
+    # Overview comes before the cells of its sheet so the LLM reads it first.
+    s1_indices = [i for i, f in enumerate(out) if f.location_hint.startswith("S1!")]
+    assert out[s1_indices[0]].location_hint == "S1!__overview__"
+
+
+def test_scan_xlsx_overview_flags_single_header_row_form():
+    """Header row + nothing else should still trigger the structural hint.
+
+    Real-world entry forms often look exactly like this: one row of column
+    labels at A1:H1 and openpyxl's max_row reports 1 (not "1 + blank pad").
+    Without the explicit hint the LLM can't tell apart a tiny one-row note
+    from a blank-row template, so Mode B never fires.
+    """
+    raw = _make_xlsx({"Sheet1": [["姓名", "工号", "部门"]]})
+    out = scan_xlsx(raw)
+    overview = next(f for f in out if f.location_hint == "Sheet1!__overview__")
+    assert "结构提示" in overview.text
+    assert "第 2 行" in overview.text
+
+
+def test_scan_xlsx_overview_flags_header_with_blank_data_rows():
+    """Header in row 1, max_row pushed to 5 by an explicit blank cell, no other data."""
+    wb = openpyxl.Workbook()
+    wb.active.title = "Sheet1"
+    wb.active["A1"] = "姓名"
+    wb.active["B1"] = "工号"
+    # Touch row 5 to bump max_row past the header without putting a value
+    # in any earlier blank row.
+    wb.active.cell(row=5, column=1).value = None
+    wb.active.cell(row=5, column=1).comment = None
+    # openpyxl tracks max_row via writes — set then clear by writing empty.
+    wb.active["A5"] = "x"
+    wb.active["A5"] = None
+    buf = io.BytesIO()
+    wb.save(buf)
+    out = scan_xlsx(buf.getvalue())
+    overview = next(f for f in out if f.location_hint == "Sheet1!__overview__")
+    assert "结构提示" in overview.text
+
+
+def test_scan_xlsx_overview_no_hint_for_filled_table():
+    """Multi-row sheets with data in every row aren't treated as forms."""
+    raw = _make_xlsx(
+        {
+            "明细": [
+                ["SKU", "数量"],
+                ["A001", 10],
+                ["A002", 20],
+                ["A003", 30],
+            ]
+        }
+    )
+    out = scan_xlsx(raw)
+    overview = next(f for f in out if f.location_hint == "明细!__overview__")
+    assert "结构提示" not in overview.text
 
 
 def test_chunk_for_prompt_respects_max_chars():
