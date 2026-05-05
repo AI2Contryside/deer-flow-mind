@@ -100,9 +100,7 @@ def _erpnext_init(answers: dict, profile: dict, erp) -> dict:  # noqa: ANN001
 
     return {
         "scenario": "trade_services",
-        "service_items": [
-            {"name": svc, "is_stock_item": 0, "kind": "ensure"} for svc in services
-        ],
+        "service_items": [{"name": svc, "is_stock_item": 0, "kind": "ensure"} for svc in services],
         "custom_fields": custom_fields,
         "reimbursable_account": advances != "none",
         "shipment_doctype": True,

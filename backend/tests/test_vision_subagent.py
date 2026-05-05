@@ -123,15 +123,8 @@ def test_build_subagent_runtime_middlewares_appends_view_image() -> None:
     without = build_subagent_runtime_middlewares(include_view_image=False)
     with_vision = build_subagent_runtime_middlewares(include_view_image=True)
 
-    assert not any(isinstance(m, ViewImageMiddleware) for m in without), (
-        "ViewImageMiddleware leaked into a non-vision subagent's chain — "
-        "this would cost a (small) per-turn no-op for unrelated subagents."
-    )
-    assert any(isinstance(m, ViewImageMiddleware) for m in with_vision), (
-        "ViewImageMiddleware missing from vision subagent's chain — "
-        "view_image_tool would write base64 to state but the next LLM "
-        "call would never receive the pixels."
-    )
+    assert not any(isinstance(m, ViewImageMiddleware) for m in without), "ViewImageMiddleware leaked into a non-vision subagent's chain — this would cost a (small) per-turn no-op for unrelated subagents."
+    assert any(isinstance(m, ViewImageMiddleware) for m in with_vision), "ViewImageMiddleware missing from vision subagent's chain — view_image_tool would write base64 to state but the next LLM call would never receive the pixels."
 
 
 def test_qwen_vl_models_loadable(loaded_app_config) -> None:

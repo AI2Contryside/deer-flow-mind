@@ -86,7 +86,4 @@ def test_task_tool_subagent_type_literal_excludes_tenant_onboarding() -> None:
     src = Path(__file__).resolve().parent.parent / "src" / "tools" / "builtins" / "task_tool.py"
     text = src.read_text(encoding="utf-8")
     assert "Literal[" in text, "task_tool.py no longer declares a Literal for subagent_type"
-    assert '"tenant-onboarding"' not in text, (
-        "tenant-onboarding leaked back into task_tool.subagent_type Literal — "
-        "onboarding is now inline on the lead agent and must NOT be a delegation target."
-    )
+    assert '"tenant-onboarding"' not in text, "tenant-onboarding leaked back into task_tool.subagent_type Literal — onboarding is now inline on the lead agent and must NOT be a delegation target."

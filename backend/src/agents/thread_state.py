@@ -28,9 +28,7 @@ def merge_artifacts(existing: list[str] | None, new: list[str] | None) -> list[s
     return list(dict.fromkeys(existing + new))
 
 
-def merge_artifact_metadata(
-    existing: list[dict] | None, new: list[dict] | None
-) -> list[dict]:
+def merge_artifact_metadata(existing: list[dict] | None, new: list[dict] | None) -> list[dict]:
     """Reducer for artifact metadata - merges by `path`, last write wins.
 
     Each entry carries the descriptive fields the gateway needs to surface a

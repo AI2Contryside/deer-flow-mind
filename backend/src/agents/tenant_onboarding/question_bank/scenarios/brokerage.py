@@ -19,20 +19,11 @@ _PASSTHROUGH_CHOICES: tuple[Choice, ...] = (
     Choice(value="frequent", label_cn="经常过手", label_en="Frequent"),
 )
 
-_CURRENCY_CHOICES: tuple[Choice, ...] = tuple(
-    Choice(value=c, label_cn=c, label_en=c)
-    for c in ("USD", "EUR", "CNY", "JPY", "HKD", "GBP", "Other")
-)
+_CURRENCY_CHOICES: tuple[Choice, ...] = tuple(Choice(value=c, label_cn=c, label_en=c) for c in ("USD", "EUR", "CNY", "JPY", "HKD", "GBP", "Other"))
 
-_INCOTERM_CHOICES: tuple[Choice, ...] = tuple(
-    Choice(value=t, label_cn=t, label_en=t)
-    for t in ("FOB", "CIF", "EXW", "DDP", "DAP", "Other")
-)
+_INCOTERM_CHOICES: tuple[Choice, ...] = tuple(Choice(value=t, label_cn=t, label_en=t) for t in ("FOB", "CIF", "EXW", "DDP", "DAP", "Other"))
 
-_SETTLEMENT_CHOICES: tuple[Choice, ...] = tuple(
-    Choice(value=v, label_cn=v, label_en=v)
-    for v in ("TT", "LC", "OA", "DP", "DA", "Factoring")
-)
+_SETTLEMENT_CHOICES: tuple[Choice, ...] = tuple(Choice(value=v, label_cn=v, label_en=v) for v in ("TT", "LC", "OA", "DP", "DA", "Factoring"))
 
 _SALES_PARTNER_CHOICES: tuple[Choice, ...] = (
     Choice(value="none", label_cn="否,无代理", label_en="No"),

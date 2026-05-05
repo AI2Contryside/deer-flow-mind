@@ -86,8 +86,7 @@ def load_skills(skills_path: Path | None = None, use_config: bool = True, enable
             existing = seen_by_name.get(skill.name)
             if existing is not None:
                 logger.warning(
-                    "Skipping duplicate skill %r at %s (already loaded from %s/%s); "
-                    "delete the duplicate from %s to silence this warning",
+                    "Skipping duplicate skill %r at %s (already loaded from %s/%s); delete the duplicate from %s to silence this warning",
                     skill.name,
                     skill.skill_dir,
                     existing.category,

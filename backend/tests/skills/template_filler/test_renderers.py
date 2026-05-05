@@ -86,9 +86,7 @@ def test_xlsx_render_substitutes_none_as_empty_string():
 def test_xlsx_render_via_dispatch_works_end_to_end():
     """render_for_extension routes ``.xlsx`` to the openpyxl path."""
     src = _make_xlsx_with_jinja_tags()
-    result = render_for_extension(
-        "template.xlsx", src, {"customer_name": "X", "amount": 1}
-    )
+    result = render_for_extension("template.xlsx", src, {"customer_name": "X", "amount": 1})
     # Dispatch returns a RenderResult envelope; .content holds the bytes.
     wb = openpyxl.load_workbook(io.BytesIO(result.content))
     assert wb.active["B1"].value == "X"

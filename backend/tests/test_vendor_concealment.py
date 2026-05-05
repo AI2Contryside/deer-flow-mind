@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from src.agents.concealment import VENDOR_CONCEALMENT_BLOCK
+from src.agents.lead_agent.onboarding_prompt import apply_onboarding_prompt_template
 from src.agents.lead_agent.prompt import apply_prompt_template
 from src.agents.tenant_onboarding.prompt import build_system_prompt
 
@@ -22,14 +23,11 @@ def lead_prompt() -> str:
 
 @pytest.fixture
 def lead_prompt_with_onboarding() -> str:
-    # Drive the ``<onboarding_required>`` branch so the inline copy of the
-    # onboarding script (used when subagents are off) is exercised too.
-    return apply_prompt_template(
-        subagent_enabled=False,
-        agent_name="TestAgent",
-        tenant_id="acme-001",
-        tenant_name="Acme Trading",
-    )
+    # After S2 the onboarding script lives in its own profile prompt, not
+    # spliced into the lead-agent prompt. The fixture now returns the
+    # onboarding profile's prompt directly so the same brand-leak guards
+    # still cover it.
+    return apply_onboarding_prompt_template(tenant_id="acme-001", tenant_name="Acme Trading")
 
 
 @pytest.fixture

@@ -115,12 +115,7 @@ def _erpnext_init(answers: dict, profile: dict, erp) -> dict:  # noqa: ANN001
             ]
         )
     elif tiered == "multi_tier":
-        price_lists.extend(
-            [
-                {"name": f"Tier-{i}", "kind": "selling"}
-                for i in range(1, 4)
-            ]
-        )
+        price_lists.extend([{"name": f"Tier-{i}", "kind": "selling"} for i in range(1, 4)])
 
     return {
         "scenario": "domestic_wholesale",

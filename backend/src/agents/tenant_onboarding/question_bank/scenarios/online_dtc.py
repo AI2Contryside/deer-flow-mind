@@ -95,10 +95,7 @@ def _erpnext_init(answers: dict, profile: dict, erp) -> dict:  # noqa: ANN001
         "scenario": "online_dtc",
         "modes_of_payment": [{"name": ch, "kind": "ensure"} for ch in payment_channels],
         "subscription_plan": subscription != "none",
-        "warehouse_tree": (
-            [{"name": "Onshore - Main", "is_group": 0}]
-            + ([{"name": "Overseas - Pool", "is_group": 1}] if overseas != "none" else [])
-        ),
+        "warehouse_tree": ([{"name": "Onshore - Main", "is_group": 0}] + ([{"name": "Overseas - Pool", "is_group": 1}] if overseas != "none" else [])),
         "explicitly_skip": ["LC", "BOM"],
     }
 

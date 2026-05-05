@@ -1,23 +1,30 @@
-"""template_filler — tenant-template field extraction and rendering.
+"""template_filler — tenant-template scanning, jinjaify, and rendering.
 
-Two responsibilities, deliberately split:
+Three responsibilities, deliberately split:
 
-  1. Field extraction (this package's `extractor`):
-       Read an uploaded `.docx` / `.xlsx` template, surface visible text and
-       its position, ask the LLM which spans look like "user-fillable"
-       placeholders, return a structured schema. The Go side
-       (`internal/jinja_renderer`) then uses each field's `original_text`
-       to rewrite the file into a jinja-tagged version. Runs at upload time.
+  1. Visible-text scanning (``text_scanner``):
+       Read an uploaded `.docx` / `.xlsx` template and return its visible
+       text + position hints as ``TextFragment`` records. Deterministic;
+       no LLM. Used by the ``scan_template_fields`` agent tool.
 
-  2. Filling a jinja-tagged template (this package's `renderers`):
-       Given an already-jinja-tagged template (output of step 1) and a
-       data dict, render it via docxtpl / xltpl and return the bytes.
-       Runs in chat at AI-tool-call time. Phase 1 ships a skeleton; the
-       real OSS upload + LangGraph tool wiring lands in Phase 2.
+       (Field *extraction* — deciding which spans are placeholders — used
+       to live here too in ``extractor.py`` + ``llm_prompt.py``. After S3
+       of the lead-agent task-type refactor that's gone: extraction now
+       runs as the ``template_extraction`` lead-agent profile, kicked off
+       via ``POST /api/template/extract_fields``.)
 
-The two halves are deliberately decoupled so the upload path doesn't
-depend on docxtpl/xltpl being importable, and the chat path doesn't pull
-in the LLM extraction stack.
+  2. Jinja-tagging an extracted template (``jinjaify``):
+       Given an already-extracted ``ExtractedField[]`` schema and the
+       original template bytes, rewrite each anchor into a jinja variable
+       and emit a jinja-tagged template. Runs at upload time after the
+       agent's extraction completes.
+
+  3. Filling a jinja-tagged template (``renderers``):
+       Given a jinja-tagged template plus a data dict, render via
+       docxtpl / xltpl. Runs in chat at AI-tool-call time.
+
+The three halves are deliberately decoupled so each path imports only
+what it needs.
 """
 
 from src.skills.template_filler.types import (

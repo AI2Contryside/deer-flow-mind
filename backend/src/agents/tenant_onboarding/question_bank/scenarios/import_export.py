@@ -13,10 +13,7 @@ from src.agents.tenant_onboarding.question_bank.types import (
     ScenarioPack,
 )
 
-_CURRENCY_CHOICES: tuple[Choice, ...] = tuple(
-    Choice(value=c, label_cn=c, label_en=c)
-    for c in ("USD", "EUR", "CNY", "JPY", "HKD", "GBP", "Other")
-)
+_CURRENCY_CHOICES: tuple[Choice, ...] = tuple(Choice(value=c, label_cn=c, label_en=c) for c in ("USD", "EUR", "CNY", "JPY", "HKD", "GBP", "Other"))
 
 _LOGISTICS_CHOICES: tuple[Choice, ...] = (
     Choice(value="sea", label_cn="海运", label_en="Sea"),
@@ -146,10 +143,7 @@ def _erpnext_init(answers: dict, profile: dict, erp) -> dict:  # noqa: ANN001
         "scenario": "import_export",
         "item_template": item_template,
         "warehouse_tree": warehouse_tree,
-        "price_lists": (
-            [{"name": f"Standard Selling - {c}", "currency": c, "kind": "selling"} for c in selling]
-            + [{"name": f"Standard Buying - {c}", "currency": c, "kind": "buying"} for c in buying]
-        ),
+        "price_lists": ([{"name": f"Standard Selling - {c}", "currency": c, "kind": "selling"} for c in selling] + [{"name": f"Standard Buying - {c}", "currency": c, "kind": "buying"} for c in buying]),
         "landed_cost_voucher": landed != "none",
         "item_groups": [{"name": cat, "kind": "ensure"} for cat in categories],
         "explicitly_skip": ["BOM", "Workstation"],

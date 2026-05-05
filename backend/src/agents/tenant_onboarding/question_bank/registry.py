@@ -75,9 +75,7 @@ def reset_registry_for_tests() -> None:
 
 def scenarios_by_category(category: str) -> tuple[ScenarioPack, ...]:
     """All registered packs whose ``parent_category`` matches."""
-    return tuple(
-        p for p in get_registry().values() if p.parent_category == category
-    )
+    return tuple(p for p in get_registry().values() if p.parent_category == category)
 
 
 def _has_answer(answers: dict[str, Any], qid: str) -> bool:

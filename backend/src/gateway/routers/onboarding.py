@@ -36,11 +36,7 @@ class OnboardingStatusResponse(BaseModel):
     "/onboarding/status",
     response_model=OnboardingStatusResponse,
     summary="Get tenant onboarding status",
-    description=(
-        "Returns ``completed=true`` once the tenant-onboarding subagent has "
-        "written ``profile.json`` for this tenant. The trademind-backend "
-        "gateway proxies this with the JWT-derived tenant id."
-    ),
+    description=("Returns ``completed=true`` once the tenant-onboarding subagent has written ``profile.json`` for this tenant. The trademind-backend gateway proxies this with the JWT-derived tenant id."),
 )
 async def get_onboarding_status(
     x_tenant_id: Annotated[str | None, Header()] = None,

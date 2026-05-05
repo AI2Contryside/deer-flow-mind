@@ -89,10 +89,7 @@ def _erpnext_init(answers: dict, profile: dict, erp) -> dict:  # noqa: ANN001
 
     return {
         "scenario": "subcontract_processor",
-        "service_items": [
-            {"name": f"Processing Fee - {pt}", "is_stock_item": 0, "fee_basis": fee_basis}
-            for pt in process_types
-        ],
+        "service_items": [{"name": f"Processing Fee - {pt}", "is_stock_item": 0, "fee_basis": fee_basis} for pt in process_types],
         "split_accounting": split == "split",
         "stock_entry_templates": ["Material Receipt", "Manufacture", "Material Issue"],
         "explicitly_skip": ["BOM (own)", "Subscription"],

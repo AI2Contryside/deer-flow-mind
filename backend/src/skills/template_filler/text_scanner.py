@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from typing import IO
 
 import openpyxl
-from docx import Document as DocxDocument
 
 
 @dataclass(frozen=True)
@@ -37,6 +36,11 @@ def scan_docx(file: bytes | IO[bytes]) -> list[TextFragment]:
     exactly what we want — placeholders split across runs come back fused.
     Empty paragraphs are dropped to keep the LLM context lean.
     """
+    # Lazy import: docx is only needed for .docx templates. Importing at
+    # module level would force every consumer (e.g. the xlsx-only path)
+    # to install python-docx even when they never touch a .docx file.
+    from docx import Document as DocxDocument
+
     if isinstance(file, bytes):
         file = io.BytesIO(file)
     doc = DocxDocument(file)
@@ -181,10 +185,7 @@ def _build_overview_fragment(
             non_empty_rows[-1] + 1,
         )
         rows_str = ",".join(str(r) for r in non_empty_rows)
-        hint = (
-            f"⚠️ 结构提示: 第 {rows_str} 行有内容,其余行均为空白。"
-            f" 这通常是『列头 + 空白填充行』表单结构,数据应填入第 {first_blank} 行起。"
-        )
+        hint = f"⚠️ 结构提示: 第 {rows_str} 行有内容,其余行均为空白。 这通常是『列头 + 空白填充行』表单结构,数据应填入第 {first_blank} 行起。"
         parts.append(hint)
 
     return TextFragment(text="; ".join(parts), location_hint=f"{sheet_name}!__overview__")

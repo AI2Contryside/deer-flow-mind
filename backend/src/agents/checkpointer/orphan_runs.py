@@ -69,8 +69,6 @@ def _load_global_store() -> Any | None:
     try:
         from langgraph_runtime_inmem.database import GLOBAL_STORE
     except ImportError:
-        logger.debug(
-            "langgraph_runtime_inmem not installed; skipping orphan run cleanup"
-        )
+        logger.debug("langgraph_runtime_inmem not installed; skipping orphan run cleanup")
         return None
     return GLOBAL_STORE

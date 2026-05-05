@@ -90,9 +90,7 @@ def test_compose_brokerage_writes_v3_facts_namespaces() -> None:
     data = compose_initial_profile(facts)
     profile = TenantProfile.model_validate(data)
 
-    assert profile.scenarios == [{"category": "trade", "scenarios": ["brokerage"]}] or [
-        s.model_dump() for s in profile.scenarios
-    ] == [{"category": "trade", "scenarios": ["brokerage"]}]
+    assert profile.scenarios == [{"category": "trade", "scenarios": ["brokerage"]}] or [s.model_dump() for s in profile.scenarios] == [{"category": "trade", "scenarios": ["brokerage"]}]
     assert profile.facts["company"] == {
         "name": "Acme Trading",
         "country": "China",
@@ -145,9 +143,7 @@ def test_compose_general_fallback_when_unknown_only() -> None:
 
 @pytest.mark.unit
 def test_compose_caps_imported_rows_per_doctype() -> None:
-    customers = [
-        {"name": f"CUST-{i:03d}", "display": f"Customer {i}"} for i in range(50)
-    ]
+    customers = [{"name": f"CUST-{i:03d}", "display": f"Customer {i}"} for i in range(50)]
     facts = OnboardingFacts(
         tenant_id="t-3",
         answers={"company_name": "X", "company_currency": "USD"},
@@ -167,10 +163,7 @@ def test_compose_open_questions_truncated_and_normalized() -> None:
     facts = OnboardingFacts(
         tenant_id="t-4",
         answers={"company_name": "X"},
-        open_questions=[
-            {"question": f"Q{i}", "candidates": [f"c{j}" for j in range(15)]}
-            for i in range(15)
-        ],
+        open_questions=[{"question": f"Q{i}", "candidates": [f"c{j}" for j in range(15)]} for i in range(15)],
     )
 
     data = compose_initial_profile(facts)

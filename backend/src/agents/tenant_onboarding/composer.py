@@ -119,19 +119,9 @@ def _entity_refs(rows: list[dict[str, Any]], cap: int) -> list[EntityRef]:
         name = row.get("name") or row.get("docname") or row.get("id")
         if not name:
             continue
-        display = (
-            row.get("display")
-            or row.get("title")
-            or row.get("customer_name")
-            or row.get("supplier_name")
-            or row.get("item_name")
-        )
+        display = row.get("display") or row.get("title") or row.get("customer_name") or row.get("supplier_name") or row.get("item_name")
         note = row.get("note")
-        extras = {
-            k: v
-            for k, v in row.items()
-            if k not in {"name", "docname", "id", "display", "title", "note"}
-        }
+        extras = {k: v for k, v in row.items() if k not in {"name", "docname", "id", "display", "title", "note"}}
         out.append(EntityRef(name=str(name), display=display, note=note, extras=extras))
     return out
 
@@ -139,9 +129,7 @@ def _entity_refs(rows: list[dict[str, Any]], cap: int) -> list[EntityRef]:
 # ----- summary builder ---------------------------------------------------
 
 
-def _summary_from_answers(
-    answers: dict[str, Any], scenario_ids: list[str]
-) -> str:
+def _summary_from_answers(answers: dict[str, Any], scenario_ids: list[str]) -> str:
     parts: list[str] = []
     if name := answers.get("company_name"):
         parts.append(str(name))
@@ -184,9 +172,7 @@ def _build_scenario_refs(answers: dict[str, Any]) -> list[ScenarioRef]:
 # ----- writers operating on the full profile dict ------------------------
 
 
-def _write_company_facts(
-    profile_root: dict[str, Any], answers: dict[str, Any]
-) -> None:
+def _write_company_facts(profile_root: dict[str, Any], answers: dict[str, Any]) -> None:
     """Persist the company name pulled from the lead-agent ``task`` prompt
     (not from a question — the FE already collected it).
     """
@@ -221,9 +207,7 @@ def _write_answers_via_paths(
         _set_dotted(profile_root, question.profile_path, value)
 
 
-def _apply_profile_defaults(
-    profile_root: dict[str, Any], defaults: dict[str, Any]
-) -> None:
+def _apply_profile_defaults(profile_root: dict[str, Any], defaults: dict[str, Any]) -> None:
     """Apply scenario-pack ``profile_defaults`` (dotted paths from profile
     root) without overwriting explicit answers already written.
     """
@@ -233,9 +217,7 @@ def _apply_profile_defaults(
         _set_dotted(profile_root, path, value)
 
 
-def _derive_brokerage_trade_mode(
-    profile_root: dict[str, Any], answers: dict[str, Any]
-) -> None:
+def _derive_brokerage_trade_mode(profile_root: dict[str, Any], answers: dict[str, Any]) -> None:
     """If brokerage is in scope, derive ``operational_patterns.trade_mode``."""
     if "brokerage" not in {p.id for p in selected_scenarios(answers)}:
         return
@@ -250,9 +232,7 @@ def _derive_brokerage_trade_mode(
     _set_dotted(profile_root, "operational_patterns.trade_mode", mode)
 
 
-def _derive_import_export_tracking_flags(
-    profile_root: dict[str, Any], answers: dict[str, Any]
-) -> None:
+def _derive_import_export_tracking_flags(profile_root: dict[str, Any], answers: dict[str, Any]) -> None:
     """If import_export is in scope, lift ``ie_tracking_level`` into the
     cross-scenario ``facts.flags.requires_batch_tracking`` /
     ``requires_serial_tracking`` booleans the runtime summarizer reads.
@@ -327,20 +307,12 @@ def compose_initial_profile(facts: OnboardingFacts) -> dict[str, Any]:
     # Default-warehouse-by-company is a per-company dict. When the lead-agent
     # task prompt provided a company name AND the user picked a default
     # warehouse, expose it on operational_patterns for the runtime injection.
-    if (
-        answers.get("company_name")
-        and answers.get("default_warehouse")
-        and not profile_root["operational_patterns"].get("default_warehouse_by_company")
-    ):
-        profile_root["operational_patterns"]["default_warehouse_by_company"] = {
-            str(answers["company_name"]): str(answers["default_warehouse"])
-        }
+    if answers.get("company_name") and answers.get("default_warehouse") and not profile_root["operational_patterns"].get("default_warehouse_by_company"):
+        profile_root["operational_patterns"]["default_warehouse_by_company"] = {str(answers["company_name"]): str(answers["default_warehouse"])}
 
     # Lift typed sub-models out of the working dict.
     op_block = profile_root.get("operational_patterns") or {}
-    op = OperationalPatterns(
-        **{k: v for k, v in op_block.items() if k in OperationalPatterns.model_fields}
-    )
+    op = OperationalPatterns(**{k: v for k, v in op_block.items() if k in OperationalPatterns.model_fields})
 
     fact_tree = profile_root.get("facts") or {}
 

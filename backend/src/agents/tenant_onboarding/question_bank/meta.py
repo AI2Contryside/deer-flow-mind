@@ -49,9 +49,7 @@ DETAILED_SCENARIOS = OnboardingQuestion(
     # Skip Q1 entirely when the user picked ``unknown`` — registry routes them
     # to the ``general`` fallback pack so they aren't forced through a list of
     # categories they already said they couldn't classify.
-    depends_on=lambda answers: bool(
-        [c for c in (answers.get("primary_categories") or []) if c != "unknown"]
-    ),
+    depends_on=lambda answers: bool([c for c in (answers.get("primary_categories") or []) if c != "unknown"]),
 )
 
 

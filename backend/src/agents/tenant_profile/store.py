@@ -144,9 +144,7 @@ def read_profile_from_oss(tenant_id: str) -> dict[str, Any] | None:
     try:
         body = storage.get_object_bytes(bucket, key)
     except Exception as exc:  # noqa: BLE001 — OSS read is best-effort
-        logger.warning(
-            "tenant_profile: OSS get_object failed for tenant %r: %s", tenant_id, exc
-        )
+        logger.warning("tenant_profile: OSS get_object failed for tenant %r: %s", tenant_id, exc)
         return None
     try:
         data = json.loads(body.decode("utf-8"))
@@ -171,9 +169,7 @@ def _mirror_profile_to_oss(tenant_id: str, payload: str) -> None:
             content_type=_OSS_CONTENT_TYPE,
         )
     except Exception as exc:  # noqa: BLE001 — sync is best-effort
-        logger.warning(
-            "tenant_profile: OSS mirror failed for tenant %r: %s", tenant_id, exc
-        )
+        logger.warning("tenant_profile: OSS mirror failed for tenant %r: %s", tenant_id, exc)
 
 
 def _resolve_oss_target(tenant_id: str) -> tuple[Any, str | None, str | None]:

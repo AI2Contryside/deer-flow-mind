@@ -276,6 +276,70 @@ def test_build_resume_messages_with_none_answer_emits_only_tool_message():
     assert msgs[0].tool_call_id == "call_42"
 
 
+def test_build_resume_messages_skip_with_message_emits_marker_then_human():
+    # Skip path: gateway forwards ``Command(resume={"__action":
+    # "skip_with_message", "message": "..."}})`` when the user typed a new
+    # question in the main composer instead of submitting the widget. The
+    # ToolMessage MUST carry the skip marker (not the formatted question),
+    # so the model sees the original question was abandoned and treats the
+    # following HumanMessage as a fresh topic.
+    middleware = ClarificationMiddleware()
+    msgs = middleware._build_resume_messages(
+        formatted_question="❓ 怎么继续?",
+        tool_call_id="call_skip",
+        answer={"__action": "skip_with_message", "message": "改成查询一下昨天的订单"},
+    )
+
+    assert len(msgs) == 2
+    tool, human = msgs
+    assert isinstance(tool, ToolMessage)
+    assert tool.tool_call_id == "call_skip"
+    assert tool.name == "ask_clarification"
+    # The skip marker is what differentiates this from the answer path —
+    # without it the model would still see the formatted question as the
+    # tool result and try to reconcile the new HumanMessage as an answer.
+    assert tool.content == ClarificationMiddleware._SKIP_MARKER_CONTENT
+    assert isinstance(human, HumanMessage)
+    assert human.content == "改成查询一下昨天的订单"
+
+
+def test_build_resume_messages_skip_with_empty_message_only_marker():
+    # Skip with a blank follow-up still has to close the tool_call so the
+    # agent loop can continue without a dangling tool_call. The marker
+    # ToolMessage holds; no HumanMessage is appended.
+    middleware = ClarificationMiddleware()
+    msgs = middleware._build_resume_messages(
+        formatted_question="❓ Q",
+        tool_call_id="call_skip_empty",
+        answer={"__action": "skip_with_message", "message": "   "},
+    )
+
+    assert len(msgs) == 1
+    assert isinstance(msgs[0], ToolMessage)
+    assert msgs[0].content == ClarificationMiddleware._SKIP_MARKER_CONTENT
+    assert msgs[0].tool_call_id == "call_skip_empty"
+
+
+def test_build_resume_messages_unknown_action_treated_as_answer():
+    # Defensive: a dict resume value the middleware doesn't recognise must
+    # not silently swallow the user's input. Falls through to the answer
+    # path so the str-coercion appends a readable HumanMessage. Better an
+    # ugly serialisation than a lost message.
+    middleware = ClarificationMiddleware()
+    msgs = middleware._build_resume_messages(
+        formatted_question="❓ Q",
+        tool_call_id="call_unknown",
+        answer={"__action": "future_thing", "payload": "hello"},
+    )
+
+    assert len(msgs) == 2
+    assert isinstance(msgs[0], ToolMessage)
+    # ToolMessage carries the original formatted question (not the marker)
+    # because we only swap content on the recognised skip action.
+    assert msgs[0].content == "❓ Q"
+    assert isinstance(msgs[1], HumanMessage)
+
+
 def test_build_resume_messages_coerces_non_string_answers():
     # ``Command(resume=...)`` accepts arbitrary values. Coerce sensibly so
     # the model still gets a readable HumanMessage instead of a Python repr

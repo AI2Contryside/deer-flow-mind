@@ -160,7 +160,7 @@ Remittance slip (水单) · Shipping marks (唛头).
 </trade_domain_knowledge>
 
 {soul}
-{onboarding_section}{profile_context}{memory_context}
+{profile_context}{memory_context}
 
 <thinking_style>
 - Think briefly before acting: what is clear, what is ambiguous, what is missing.
@@ -386,169 +386,6 @@ def _get_profile_context(tenant_id: str | None, *, user_email: str | None = None
         return ""
 
 
-def _get_onboarding_section(tenant_id: str | None, *, subagent_enabled: bool, tenant_name: str | None = None) -> str:
-    """Inject an ``<onboarding_required>`` block when the tenant has no profile.
-
-    The block contains the full first-time-setup spec (channel selection,
-    ERPNext seeding, profile composition) and the lead agent runs it
-    in-thread instead of delegating to a subagent. The previous
-    ``tenant-onboarding`` subagent design was a poor fit for this flow:
-    ``ask_clarification`` only interrupts when ``ClarificationMiddleware``
-    is in the chain, and that middleware is bound to the lead agent only.
-    Inside a subagent the placeholder tool just returned a literal string,
-    the subagent never paused, and the user never saw the question.
-
-    Emitted only when:
-      - we have a tenant_id (otherwise we can't safely scope writes), and
-      - ``profile.json`` does not yet exist on disk.
-
-    The ``subagent_enabled`` argument is no longer required by the
-    onboarding flow itself (lead agent uses ``ask_clarification`` /
-    ``bash`` directly), but we keep it in the signature so callers don't
-    break. Onboarding still fires when subagents are off.
-
-    When ``tenant_name`` is available it becomes the ERPNext Company name
-    directly — re-asking is a known onboarding-survey complaint and the
-    Go-side create-tenant form already collected it.
-    """
-    del subagent_enabled  # no longer gates onboarding
-    if not tenant_id:
-        return ""
-    try:
-        from src.agents.tenant_profile.store import get_profile_path
-
-        if get_profile_path(tenant_id).exists():
-            return ""
-    except Exception as exc:
-        print(f"Failed to check tenant profile presence: {exc}")
-        return ""
-
-    # Inline the dynamic question plan + the full catalogue so the lead
-    # agent knows both the next batch to ask AND the complete shape of the
-    # scenario space. Source of truth lives in
-    # ``tenant_onboarding.question_bank`` (plugin packs auto-discovered).
-    try:
-        from src.agents.tenant_onboarding.prompt import (
-            format_full_question_catalogue,
-            format_question_plan,
-        )
-
-        next_batch_block = format_question_plan({})  # no answers yet at first turn
-        question_bank_block = (
-            "Next batch to ask now (Meta + Common — re-invoke the plan after each answer):\n"
-            f"{next_batch_block}\n\n"
-            "Full scenario catalogue (only ask the questions for scenarios the user picks in Q1):\n"
-            f"{format_full_question_catalogue()}"
-        )
-    except Exception as exc:
-        print(f"Failed to load onboarding question bank: {exc}")
-        question_bank_block = "(question bank failed to load — ask the user generically)"
-
-    tenant_name_clean = (tenant_name or "").strip()
-    company_line = (
-        f"Tenant company name: {tenant_name_clean} — use this VERBATIM as ``answers['company_name']`` "
-        "and as the ERPNext ``Company`` name. Do NOT ask the user for the company name.\n"
-        if tenant_name_clean
-        else "Tenant company name: <not provided> — fall back to tenant_id and surface a single open_question.\n"
-    )
-
-    return f"""<onboarding_required>
-This tenant ({tenant_id}) does not have a ``profile.json`` yet. The desktop client has parked the user on a dedicated init screen and is polling ``/gateway/onboarding/status`` for the file's existence. **Until you write ``profile.json``, first-time setup is your only job.** If the user asks for unrelated work mid-onboarding, finish onboarding first then handle their original request.
-
-Tenant id: {tenant_id} (use this EXACT string in phase 3 ``write_profile`` — do not improvise)
-{company_line}
-<phase_1_channel_selection>
-List ``/mnt/user-data/uploads`` first via ``bash``.
-
-  - **Files present** → Excel/hybrid path. For each upload:
-    * Prefer the structured ``*.docling.json`` sibling for header / table extraction (preserves cell row/col spans, heading levels, per-sheet table boundaries). Fall back to the raw file only if the sidecar is missing. ``*.docling.summary.json`` has up-front row/col counts — read it before the full JSON.
-    * For very large spreadsheets (>50k rows or >20MB), do NOT load the docling JSON into context — write Python (``duckdb.sql("SELECT … FROM read_xlsx(path, sheet=, range=)")``, ``pandas.read_excel(path, engine='calamine')``, or ``openpyxl.load_workbook(path, read_only=True).iter_rows(...)``).
-    * Identify the doctype (Customer / Supplier / Item / Item Price / Warehouse / Account). If ambiguous, call ``ask_clarification`` with the file name and a candidate list — don't guess.
-    * Cap at 200 rows per file in v1 seed; tell the user if you truncate.
-  - **No uploads** → pure Q&A path; walk the dynamic question plan below.
-
-Question plan is **three phases**, in order:
-  1. **Meta** (`primary_categories`, then `detailed_scenarios`) — routes which scenario packs apply.
-  2. **Common** (5 questions) — every tenant answers all.
-  3. **Scenario packs** — only the packs the user picked in Q1. Cross-pack duplicates (same `profile_path`) are deduped; ask each unique question once.
-
-{question_bank_block}
-
-Ask T1 questions in **batches of 3-5** via ``ask_clarification`` (``clarification_type="missing_info"``). Never ask one at a time (slow), never all at once (overwhelming). After each answer batch, re-derive the next questions by calling ``build_question_plan(answers)`` from ``src.agents.tenant_onboarding.question_bank`` — do NOT hand-pick from a static list. Skip questions whose answer is already implied by an upload. Re-asking already-answered questions is the #1 onboarding-survey complaint — avoid it.
-</phase_1_channel_selection>
-
-<phase_2_erpnext_seeding>
-Use ONLY the ``erpnext-cli`` skill via ``bash``. Read ``/mnt/skills/public/erpnext-cli/SKILL.md`` first if you haven't this session. The CLI handles ``X-Tenant-ID`` and credential injection from env vars the runtime sets — do NOT echo or look for them.
-
-Order matters because ERPNext has hard prerequisites:
-
-  1. ``bootstrap status`` — verify creds + see what masters exist. If this returns ``AuthError`` STOP and surface verbatim; do not retry, do not call ``session login``.
-  2. ``Company`` — name from tenant company name above, currency from ``answers.company_currency``, country from ``answers.company_country``. Idempotent.
-  3. **Default Warehouse** — "Stores" leaf under the auto-created "All Warehouses - <ABBR>". Some scenario packs (e.g. ``import_export``, ``physical_store``) extend this with their own structure — see the per-scenario blueprint below.
-  4. **Default Price List** — "Standard Selling". Brokerage seeds one per selling/buying currency (per the scenario blueprint). Skip names that already exist.
-  5. **Per-scenario blueprints** — call ``collect_erpnext_init_blueprints(answers)`` (from ``src.agents.tenant_onboarding.composer``) for the declarative shape of each picked scenario; feed each to ``erpnext-cli``. Idempotent.
-  6. **Master data from uploads**, in this exact order (each layer depends on the previous):
-     a. Suppliers (no upstream prereqs)
-     b. Customers (no upstream prereqs)
-     c. Items (uses default Item Group "All Item Groups" if none specified)
-     d. Item Prices (depends on Items + Price List)
-
-For every batch report a short receipt: ``N created, M skipped (already existed), K failed``. Accumulate failed-row reasons into the ``open_questions`` you'll feed to phase 3. Do NOT abort onboarding on partial failure — one bad Customer row must not stop Items.
-
-After 3 consecutive same-error CLI failures, STOP and surface the literal error. The runtime is deliberately non-self-healing.
-</phase_2_erpnext_seeding>
-
-<phase_3_profile_composition>
-Build the ``OnboardingFacts`` payload at ``/mnt/user-data/workspace/onboarding_facts.json``:
-
-  - ``tenant_id`` — the EXACT value at the top of this block ({tenant_id}). Do not parse paths, do not check env, do not guess.
-  - ``answers`` — keyed by ``OnboardingQuestion.id``.
-  - ``imported`` — ``{{doctype: [{{name, ...}}]}}`` of created records.
-  - ``open_questions`` — list of ``{{question, candidates}}`` for failed imports / ambiguous columns.
-
-Then run BOTH compose + write atomically in a single bash command (no commentary between them) so a partial success can't leave inconsistent state:
-
-  python - <<'PY'
-  import json, sys
-  from src.agents.tenant_onboarding import compose_initial_profile, OnboardingFacts
-  from src.agents.tenant_profile.store import write_profile
-  facts = json.load(open('/mnt/user-data/workspace/onboarding_facts.json'))
-  facts['tenant_id'] = "{tenant_id}"
-  profile = compose_initial_profile(OnboardingFacts(**facts))
-  json.dump(profile, open('/mnt/user-data/workspace/profile.json', 'w'),
-            ensure_ascii=False, indent=2)
-  if not write_profile("{tenant_id}", profile):
-      sys.exit('write_profile returned False — check logs for ValueError on tenant_id format')
-  print('WROTE profile.json for tenant {tenant_id}')
-  PY
-
-When ``WROTE profile.json for tenant {tenant_id}`` appears, onboarding is complete and the FE will pick it up on its next status poll (≤5s). Both helpers raise on schema mismatch — if either fails, fix the facts dict and retry; do NOT hand-edit the profile JSON.
-</phase_3_profile_composition>
-
-<termination>
-Onboarding is done when:
-  - All T1 answers are non-empty, AND
-  - The Company and default Warehouse records exist in the back-office, AND
-  - ``profile.json`` validates against ``TenantProfile`` and was written via ``write_profile``.
-
-Final message shape. Use neutral product-facing language per ``<vendor_concealment>`` — do NOT name the back-office stack and do NOT paste the raw CLI envelope to the user:
-
-  ✅ 工作空间初始化完成。
-  - Company: <name> (<currency>, <country>)
-  - Warehouse: <name>
-  - Imported: <N customers, M suppliers, K items, …>
-  - Open questions to resolve later: <count>
-
-If you stop early due to AuthError or repeated CLI failure:
-
-  ⛔ 工作空间初始化中止。<one-line product-neutral reason>。(Code: <bare error code from CLI, e.g. AuthError>)
-
-Be concise — onboarding is a setup ritual; long narratives erode trust.
-</termination>
-</onboarding_required>
-"""
-
-
 def _get_memory_context(agent_name: str | None = None, tenant_id: str | None = None) -> str:
     """Get memory context for injection into system prompt.
 
@@ -658,11 +495,12 @@ def apply_prompt_template(
     # tenant" before any per-conversation memory is layered on).
     profile_context = _get_profile_context(tenant_id, user_email=user_email)
 
-    # Onboarding nudge: only present when profile.json is missing AND
-    # subagents are enabled. Sits before profile_context because it's a
-    # higher-priority instruction (delegate before reasoning over an empty
-    # profile).
-    onboarding_section = _get_onboarding_section(tenant_id, subagent_enabled=subagent_enabled, tenant_name=tenant_name)
+    # Onboarding moved out of this template — when profile.json is missing,
+    # the registry routes the run to the ``tenant_onboarding`` profile,
+    # which has its own purpose-built system prompt
+    # (``src/agents/lead_agent/onboarding_prompt.py``). The ``tenant_name``
+    # argument is preserved on this signature only so callers don't break.
+    del tenant_name
 
     # Get memory context
     memory_context = _get_memory_context(agent_name, tenant_id)
@@ -685,7 +523,6 @@ def apply_prompt_template(
         agent_name=agent_name or "DeerFlow 2.0",
         soul=get_agent_soul(agent_name),
         skills_section=skills_section,
-        onboarding_section=onboarding_section,
         profile_context=profile_context,
         memory_context=memory_context,
         subagent_section=subagent_section,

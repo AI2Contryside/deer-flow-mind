@@ -9,10 +9,7 @@ from pathlib import Path
 
 import pytest
 
-_SKILL_MD = (
-    Path(__file__).resolve().parents[2]
-    / "skills" / "public" / "erpnext-cli" / "SKILL.md"
-)
+_SKILL_MD = Path(__file__).resolve().parents[2] / "skills" / "public" / "erpnext-cli" / "SKILL.md"
 
 
 @pytest.fixture(scope="module")
@@ -88,7 +85,7 @@ def test_skill_md_does_not_advise_env_var_enumeration(skill_md_text: str) -> Non
     # The forbidden block must name the specific commands the prompt
     # also bans — otherwise the doc and the prompt drift apart.
     forbidden_block_start = skill_md_text.index("Forbidden inside the harness")
-    forbidden_block = skill_md_text[forbidden_block_start:forbidden_block_start + 1000]
+    forbidden_block = skill_md_text[forbidden_block_start : forbidden_block_start + 1000]
     assert "env" in forbidden_block
     assert "printenv" in forbidden_block
     assert "ERPNEXT_*" in forbidden_block

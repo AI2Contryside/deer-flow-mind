@@ -7,13 +7,13 @@ get validation + JSON schema for free.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
-class FieldType(str, Enum):
+class FieldType(StrEnum):
     """User-facing field types.
 
     v1 only renders STRING — number/date/currency are accepted in the schema

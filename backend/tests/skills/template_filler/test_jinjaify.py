@@ -110,11 +110,7 @@ def test_xlsx_unknown_sheet_skipped():
 def test_xlsx_inline_text_replace():
     """Bracket placeholder inside a cell, replace mode → bracket eaten."""
     src = _xlsx_with_inline_placeholder()
-    fields = [
-        ExtractedField(
-            name="customer_name", label="客户", original_text="[客户名]", anchor_mode="replace"
-        )
-    ]
+    fields = [ExtractedField(name="customer_name", label="客户", original_text="[客户名]", anchor_mode="replace")]
     result = jinjaify(src, "form.xlsx", fields)
 
     wb = openpyxl.load_workbook(io.BytesIO(result.content))
@@ -149,9 +145,7 @@ def test_docx_replace_mode_consumes_placeholder():
     """Bracket-style placeholder anchored as replace → fully eaten."""
     src = _docx_with_inline_placeholder()
     fields = [
-        ExtractedField(
-            name="customer_name", label="客户", original_text="[客户名]", anchor_mode="replace"
-        ),
+        ExtractedField(name="customer_name", label="客户", original_text="[客户名]", anchor_mode="replace"),
         ExtractedField(name="date", label="日期", original_text="[日期]", anchor_mode="replace"),
     ]
     result = jinjaify(src, "po.docx", fields)

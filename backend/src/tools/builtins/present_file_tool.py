@@ -188,14 +188,7 @@ def present_file_tool(
         for vp in normalized_paths:
             upload_status[vp] = _push_to_oss(thread_id, tenant_id, vp)
 
-    metadata = [
-        meta
-        for meta in (
-            _build_metadata(thread_id, tenant_id, vp, upload_status.get(vp, False))
-            for vp in normalized_paths
-        )
-        if meta is not None
-    ]
+    metadata = [meta for meta in (_build_metadata(thread_id, tenant_id, vp, upload_status.get(vp, False)) for vp in normalized_paths) if meta is not None]
 
     update: dict = {
         "artifacts": normalized_paths,

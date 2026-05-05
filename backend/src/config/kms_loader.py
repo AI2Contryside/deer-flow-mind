@@ -110,10 +110,7 @@ class KMSResolver:
         if not is_kms_ref(value):
             return value
         if not self._enabled:
-            raise RuntimeError(
-                f"KMS disabled (KMS_ENABLED=false) but reference {value!r} encountered. "
-                "Set KMS_ENABLED=true or replace the reference with a plaintext value."
-            )
+            raise RuntimeError(f"KMS disabled (KMS_ENABLED=false) but reference {value!r} encountered. Set KMS_ENABLED=true or replace the reference with a plaintext value.")
         secret_name = strip_kms_prefix(value)
         if not secret_name:
             raise ValueError("KMS reference has empty secret name")

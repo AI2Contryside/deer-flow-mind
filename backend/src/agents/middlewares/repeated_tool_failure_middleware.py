@@ -52,11 +52,7 @@ _REPEAT_FAILURE_THRESHOLD = 3
 
 # User-visible message returned when the guard fires. Deliberately
 # generic so it does not leak stack frames or upstream URLs.
-_ABORT_MESSAGE = (
-    "系统暂时不可用，已暂停操作。"
-    "（同一个工具连续 3 次失败，已自动停止以避免无限重试。请稍后重试，"
-    "或换一种方式描述你的需求。）"
-)
+_ABORT_MESSAGE = "系统暂时不可用，已暂停操作。（同一个工具连续 3 次失败，已自动停止以避免无限重试。请稍后重试，或换一种方式描述你的需求。）"
 
 # Common upstream error tokens the tool runner / erpnext-cli surfaces. We
 # extract the *first* match as the signature so wording variations of
@@ -192,8 +188,7 @@ class RepeatedToolFailureMiddleware(AgentMiddleware[AgentState]):
             return result
 
         logger.warning(
-            "RepeatedToolFailureMiddleware aborting run: "
-            "signature=%s streak=%d (threshold=%d)",
+            "RepeatedToolFailureMiddleware aborting run: signature=%s streak=%d (threshold=%d)",
             signature,
             total_streak,
             _REPEAT_FAILURE_THRESHOLD,

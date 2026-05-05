@@ -163,13 +163,16 @@ def test_status_b987fdbe_empty_tenant_blocks_every_chain(monkeypatch) -> None:
 def test_status_partial_seed_only_blocks_the_unmet_chains(monkeypatch) -> None:
     # Has Company + Warehouse + Item + Supplier (so purchase ready), but no
     # Customer (so sales NOT ready) and no Item Group records.
-    payload = _invoke_status(monkeypatch, get_list_return={
-        "Company": [{"name": "BIEL"}],
-        "Warehouse": [{"name": "Main"}],
-        "Item": [{"name": "SKU-001"}],
-        "Supplier": [{"name": "NOXIA"}],
-        # missing: Item Group, Customer
-    })
+    payload = _invoke_status(
+        monkeypatch,
+        get_list_return={
+            "Company": [{"name": "BIEL"}],
+            "Warehouse": [{"name": "Main"}],
+            "Item": [{"name": "SKU-001"}],
+            "Supplier": [{"name": "NOXIA"}],
+            # missing: Item Group, Customer
+        },
+    )
     assert payload["ready_for_purchase"] is True
     assert payload["ready_for_sales"] is False
     assert payload["ready_for_stock_in"] is True
@@ -180,9 +183,12 @@ def test_status_partial_seed_only_blocks_the_unmet_chains(monkeypatch) -> None:
 @pytest.mark.unit
 def test_status_surfaces_upstream_probe_errors(monkeypatch) -> None:
     # Frappe is half-broken: Company probe fails with 500, others return 0.
-    payload = _invoke_status(monkeypatch, get_list_return={
-        "Company": ServerError("BrokenPipe", status_code=500),
-    })
+    payload = _invoke_status(
+        monkeypatch,
+        get_list_return={
+            "Company": ServerError("BrokenPipe", status_code=500),
+        },
+    )
     assert payload["company_count"] == 0
     assert payload["probe_errors"]["Company"] == "ServerError 500"
     company_entry = next(m for m in payload["missing"] if m["doctype"] == "Company")
@@ -191,9 +197,7 @@ def test_status_surfaces_upstream_probe_errors(monkeypatch) -> None:
 
 @pytest.mark.unit
 def test_status_surfaces_auth_failure_distinctly(monkeypatch) -> None:
-    payload = _invoke_status(monkeypatch, get_list_return={
-        dt: AuthError("token rejected", status_code=403) for dt, _ in _PROBES
-    })
+    payload = _invoke_status(monkeypatch, get_list_return={dt: AuthError("token rejected", status_code=403) for dt, _ in _PROBES})
     # Every probe failed with the same auth error, so every chain is blocked.
     assert payload["ready_for_purchase"] is False
     assert all(err == "AuthError 403" for err in payload["probe_errors"].values())

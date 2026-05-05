@@ -68,10 +68,12 @@ def test_resolve_empty_body_raises():
 
 
 def test_resolve_in_config_recurses_dict_and_list():
-    fake = _FakeKMSClient(values={
-        "deerflow/openai": "sk-1",
-        "deerflow/postgres": "postgres://u:p@h/db",
-    })
+    fake = _FakeKMSClient(
+        values={
+            "deerflow/openai": "sk-1",
+            "deerflow/postgres": "postgres://u:p@h/db",
+        }
+    )
     r = KMSResolver(client=fake, enabled=True)
 
     config = {
@@ -103,10 +105,12 @@ def test_app_config_resolve_env_variables_handles_kms(monkeypatch):
     """app_config.AppConfig.resolve_env_variables wires through to KMS loader."""
     from src.config import app_config
 
-    fake = _FakeKMSClient(values={
-        "deerflow/openai": "sk-from-kms",
-        "deerflow/anthropic": "claude-from-kms",
-    })
+    fake = _FakeKMSClient(
+        values={
+            "deerflow/openai": "sk-from-kms",
+            "deerflow/anthropic": "claude-from-kms",
+        }
+    )
     fake_resolver = KMSResolver(client=fake, enabled=True)
     monkeypatch.setattr(kms_loader, "_default_resolver", fake_resolver)
 

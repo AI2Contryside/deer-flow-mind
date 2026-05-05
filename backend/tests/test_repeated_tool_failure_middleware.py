@@ -51,11 +51,7 @@ def test_signature_none_for_success() -> None:
 @pytest.mark.unit
 def test_signature_extracts_error_class_from_b987fdbe_payload() -> None:
     # Verbatim payload shape from session b987fdbe msg 27/35.
-    payload = (
-        '{ "ok": false, "error": { "error": "ServerError", '
-        '"message": "BrokenPipeError: [Errno 32] Broken pipe", '
-        '"status_code": 500 } }'
-    )
+    payload = '{ "ok": false, "error": { "error": "ServerError", "message": "BrokenPipeError: [Errno 32] Broken pipe", "status_code": 500 } }'
     sig = _failure_signature(_tool_msg("bash", payload))
     assert sig is not None
     assert "bash::" in sig

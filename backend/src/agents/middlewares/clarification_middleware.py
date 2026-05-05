@@ -131,6 +131,23 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
 
         return "\n".join(message_parts)
 
+    # Sentinel ``__action`` value the gateway emits when the user typed a new
+    # message in the main composer instead of submitting the clarification
+    # widget. The gateway forwards the new message under ``message`` so we can
+    # commit it as a HumanMessage AFTER closing the dangling tool_call with a
+    # marker ToolMessage that tells the model the question went unanswered.
+    # This is what lets the model do a clean topic shift instead of treating
+    # the unrelated new question as the "answer" to the original
+    # ``ask_clarification`` call.
+    _SKIP_ACTION = "skip_with_message"
+
+    # Text the marker ToolMessage carries on the skip path. Picked so a
+    # non-widget client (older FE, IM channel) replaying chat history sees
+    # exactly why the question is followed by an unrelated user turn, and
+    # so the model has an explicit signal to shift context rather than try
+    # to reconcile the new turn with the unanswered question.
+    _SKIP_MARKER_CONTENT = "(用户未回答此澄清问题,改为提出新的请求)"
+
     def _build_resume_messages(
         self,
         formatted_question: str,
@@ -139,18 +156,46 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
     ) -> list:
         """Build the messages to commit on resume.
 
-        Returns the ToolMessage that closes the original ``ask_clarification``
-        tool_call, plus a HumanMessage carrying the user's answer when one
-        was provided. Empty / null answers (``Command(resume=None)`` or the
-        user submitting an empty string) only commit the ToolMessage so the
-        protocol invariant — every tool_call.id has a matching ToolMessage —
-        still holds and the model can decide how to proceed.
+        Three resume shapes are supported:
+
+        * ``str`` / non-string scalar → user answered the clarification.
+          Commit the formatted question as a ToolMessage closing the
+          original tool_call, then a HumanMessage with the answer.
+        * ``None`` (``Command(resume=None)``) or an empty/whitespace string →
+          user skipped without sending anything. Commit only the ToolMessage
+          so the protocol invariant — every tool_call.id has a matching
+          ToolMessage — still holds and DanglingToolCallMiddleware never has
+          to repair it.
+        * ``{"__action": "skip_with_message", "message": "..."}`` → user
+          ignored the widget and typed a new question in the main composer.
+          The gateway emits this when ``is_clarification_response=false``;
+          we close the tool_call with a marker so the model sees the
+          question was skipped, then append the user's new HumanMessage.
+          Without this branch the new question would be persisted as if it
+          were the answer to the original question, and the model would
+          contort its next reply to bridge the two.
         """
         tool_message = ToolMessage(
             content=formatted_question,
             tool_call_id=tool_call_id,
             name="ask_clarification",
         )
+
+        if isinstance(answer, dict) and answer.get("__action") == self._SKIP_ACTION:
+            new_message = answer.get("message")
+            new_text = str(new_message).strip() if not isinstance(new_message, str) else new_message.strip()
+            marker = ToolMessage(
+                content=self._SKIP_MARKER_CONTENT,
+                tool_call_id=tool_call_id,
+                name="ask_clarification",
+            )
+            if new_text:
+                return [marker, HumanMessage(content=new_text)]
+            # Skip with no follow-up text degrades to "user skipped" — the
+            # tool_call still gets closed, the agent loop continues with the
+            # marker visible in history.
+            return [marker]
+
         messages: list = [tool_message]
         if answer is None:
             return messages

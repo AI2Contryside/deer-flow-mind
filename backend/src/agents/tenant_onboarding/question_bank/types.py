@@ -62,9 +62,7 @@ class OnboardingQuestion:
     tier: int = 1
     choices: tuple[Choice, ...] = ()
     max_select: int | None = None
-    depends_on: Callable[[dict[str, Any]], bool] | None = field(
-        default=None, compare=False
-    )
+    depends_on: Callable[[dict[str, Any]], bool] | None = field(default=None, compare=False)
     note: str | None = None
     # Backwards-compat: legacy code paths inspected ``options: tuple[str, ...]``
     # of plain strings. New code uses ``choices`` (with bilingual labels).
@@ -101,9 +99,7 @@ class ScenarioPack:
     description_cn: str
     questions: tuple[OnboardingQuestion, ...]
     profile_defaults: dict[str, Any] = field(default_factory=dict)
-    erpnext_init_template: Callable[..., Any] | None = field(
-        default=None, compare=False
-    )
+    erpnext_init_template: Callable[..., Any] | None = field(default=None, compare=False)
 
 
 __all__ = [

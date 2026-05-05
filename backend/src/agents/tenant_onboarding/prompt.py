@@ -31,16 +31,10 @@ def _render_choices(question: OnboardingQuestion) -> str:
 def _render_one(question: OnboardingQuestion) -> str:
     tier_tag = "T1" if question.tier == 1 else "T2"
     type_tag = question.qtype
-    multi = (
-        f" max_select={question.max_select}" if question.qtype == "multi" and question.max_select else ""
-    )
+    multi = f" max_select={question.max_select}" if question.qtype == "multi" and question.max_select else ""
     choices = _render_choices(question)
     depends = " (only if depends_on)" if question.depends_on else ""
-    return (
-        f"  - [{tier_tag}/{type_tag}{multi}] {question.id} → {question.profile_path}{choices}{depends}\n"
-        f"      Q (cn): {question.question_cn}\n"
-        f"      Q (en): {question.question_en}"
-    )
+    return f"  - [{tier_tag}/{type_tag}{multi}] {question.id} → {question.profile_path}{choices}{depends}\n      Q (cn): {question.question_cn}\n      Q (en): {question.question_en}"
 
 
 def format_question_plan(answers: dict[str, Any] | None = None) -> str:
@@ -70,9 +64,7 @@ def format_full_question_catalogue() -> str:
     parts.append("\n  # Common (every tenant)")
     parts.extend(_render_one(q) for q in COMMON_QUESTIONS)
     for pack in get_registry().values():
-        parts.append(
-            f"\n  # Scenario: {pack.id} ({pack.parent_category}) — {pack.name_cn}"
-        )
+        parts.append(f"\n  # Scenario: {pack.id} ({pack.parent_category}) — {pack.name_cn}")
         parts.extend(_render_one(q) for q in pack.questions)
     return "\n".join(parts)
 

@@ -118,9 +118,7 @@ def test_tool_and_human_messages_are_untouched(model: PatchedChatDeepSeek) -> No
         AIMessage(
             content="ok",
             additional_kwargs={"reasoning_content": "thinking"},
-            tool_calls=[
-                {"name": "ls", "args": {"path": "/"}, "id": "c1", "type": "tool_call"}
-            ],
+            tool_calls=[{"name": "ls", "args": {"path": "/"}, "id": "c1", "type": "tool_call"}],
         ),
         ToolMessage(content="bin\nusr", tool_call_id="c1"),
     ]

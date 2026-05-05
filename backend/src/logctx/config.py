@@ -14,12 +14,7 @@ import logging
 from src.logctx.filter import LogContextFilter
 
 # Default log line. ``%(log_id)s`` etc. resolve via LogContextFilter.
-DEFAULT_FORMAT = (
-    "%(asctime)s %(levelname)s "
-    "tenant_id=%(tenant_id)s user_id=%(user_id)s "
-    "log_id=%(log_id)s session_id=%(session_id)s "
-    "%(name)s - %(message)s"
-)
+DEFAULT_FORMAT = "%(asctime)s %(levelname)s tenant_id=%(tenant_id)s user_id=%(user_id)s log_id=%(log_id)s session_id=%(session_id)s %(name)s - %(message)s"
 
 DEFAULT_DATEFMT = "%Y-%m-%d %H:%M:%S"
 

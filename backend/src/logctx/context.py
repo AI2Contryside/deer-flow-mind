@@ -28,9 +28,7 @@ HEADER_SESSION_ID = "X-Session-Id"
 # other file in this package picks the new field up automatically.
 KNOWN_FIELDS: tuple[str, ...] = ("tenant_id", "user_id", "log_id", "session_id")
 
-_CTX_VARS: dict[str, ContextVar[str]] = {
-    name: ContextVar(f"logctx_{name}", default="") for name in KNOWN_FIELDS
-}
+_CTX_VARS: dict[str, ContextVar[str]] = {name: ContextVar(f"logctx_{name}", default="") for name in KNOWN_FIELDS}
 
 _HEADER_BY_FIELD: Mapping[str, str] = {
     "tenant_id": HEADER_TENANT_ID,
@@ -56,7 +54,7 @@ class Fields:
         """Return a new Fields where non-empty values in ``other`` win."""
         kwargs = self.as_dict()
         for name in KNOWN_FIELDS:
-            if (v := getattr(other, name)):
+            if v := getattr(other, name):
                 kwargs[name] = v
         return Fields(**kwargs)
 

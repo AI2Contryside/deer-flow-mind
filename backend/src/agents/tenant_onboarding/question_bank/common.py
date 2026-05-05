@@ -28,10 +28,7 @@ _COUNTRY_CHOICES: tuple[Choice, ...] = (
     Choice(value="Other", label_cn="其他", label_en="Other"),
 )
 
-_CURRENCY_CHOICES: tuple[Choice, ...] = (
-    Choice(value=c, label_cn=c, label_en=c)
-    for c in ("CNY", "USD", "EUR", "JPY", "HKD", "GBP", "Other")
-)
+_CURRENCY_CHOICES: tuple[Choice, ...] = (Choice(value=c, label_cn=c, label_en=c) for c in ("CNY", "USD", "EUR", "JPY", "HKD", "GBP", "Other"))
 _CURRENCY_CHOICES = tuple(_CURRENCY_CHOICES)
 
 _FISCAL_CHOICES: tuple[Choice, ...] = (

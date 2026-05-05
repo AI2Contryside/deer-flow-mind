@@ -133,9 +133,7 @@ def _run_middleware(scope_headers: list[tuple[bytes, bytes]]):
 
 
 def test_identity_middleware_lifts_headers_and_echoes_log_id():
-    captured, sent = _run_middleware(
-        [(b"x-tenant-id", b"t-mw"), (b"x-log-id", b"l-mw")]
-    )
+    captured, sent = _run_middleware([(b"x-tenant-id", b"t-mw"), (b"x-log-id", b"l-mw")])
     assert captured["tenant"] == "t-mw"
     assert captured["log_id"] == "l-mw"
     start = next(m for m in sent if m["type"] == "http.response.start")

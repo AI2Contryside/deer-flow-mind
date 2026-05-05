@@ -70,6 +70,7 @@ def test_oss_failure_does_not_break_local_write(tmp_paths: Path, monkeypatch: py
         def config(self) -> object:
             class Cfg:
                 chat_bucket = "trademind-chat-session"
+
             return Cfg()
 
         def put_object(self, *args: object, **kwargs: object) -> None:

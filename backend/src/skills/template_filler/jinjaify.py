@@ -68,9 +68,7 @@ class JinjaifyResult:
 
 
 _JINJA_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_JINJA_KEYWORDS = frozenset(
-    {"for", "endfor", "if", "endif", "else", "elif", "in", "and", "or", "not", "true", "false", "none", "True", "False", "None"}
-)
+_JINJA_KEYWORDS = frozenset({"for", "endfor", "if", "endif", "else", "elif", "in", "and", "or", "not", "true", "false", "none", "True", "False", "None"})
 
 
 def _valid_jinja_identifier(name: str) -> bool:
