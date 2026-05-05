@@ -1,10 +1,14 @@
 """Rewrite an uploaded template into a jinja-tagged variant.
 
-Two modes per field, see types.ExtractedField:
+Three field shapes, see types.ExtractedField:
 
-  • Inline-text (`original_text`): paragraph-level text replace. Mirrors
-    the Go-side `internal/jinja_renderer` behaviour for docx; for xlsx
-    we replace inside cells without mutating sheet structure.
+  • docx label-anchor "append" mode (default): keeps the anchor in
+    place and adds `{{ name }}` after it. Used for "客户名称:" → renders
+    to "客户名称:{{ customer_name }}". The label survives, so the user's
+    formatted document still reads naturally.
+  • docx placeholder "replace" mode: eats the anchor entirely and writes
+    `{{ name }}` in its place. Used for "________" or "在此填入" →
+    renders to "{{ field }}". The original placeholder string disappears.
   • Header-cell (`cell_anchor`): xlsx-only. Write `{{ name }}` directly
     into the data-row cell so column headers stay intact and the value
     lands one row down at render time.
@@ -205,7 +209,11 @@ def _xlsx_text_replace(wb: openpyxl.Workbook, fields: list[ExtractedField]) -> l
         ws = wb[sheet]
         # Replace only the first occurrence within the cell value, mirroring
         # the Go renderer's "single match per paragraph" semantics.
-        new_value = original.replace(f.original_text, _tag(f.name), 1)
+        if f.anchor_mode == "replace":
+            replacement = _tag(f.name)
+        else:
+            replacement = f.original_text + _tag(f.name)
+        new_value = original.replace(f.original_text, replacement, 1)
         ws[coord] = new_value
         outcomes.append(JinjaifyOutcome(f.name, True))
     return outcomes
@@ -264,7 +272,16 @@ def _jinjaify_docx(buf: IO[bytes], fields: list[ExtractedField]) -> JinjaifyResu
             if hit_counts[i] > 1:
                 continue  # marked below
             if f.original_text in paragraph.text:
-                paragraph.text = paragraph.text.replace(f.original_text, _tag(f.name), 1)
+                # anchor_mode = "append" — keep the anchor (which is the
+                # human-readable label) and write the jinja tag right
+                # after it. anchor_mode = "replace" — eat the anchor
+                # entirely (it was a placeholder string with no semantic
+                # value to preserve).
+                if f.anchor_mode == "replace":
+                    new_value = _tag(f.name)
+                else:
+                    new_value = f.original_text + _tag(f.name)
+                paragraph.text = paragraph.text.replace(f.original_text, new_value, 1)
                 field_status[i] = "applied"
                 # Once applied, decrement total count so future paragraphs
                 # holding the same string don't re-fire (shouldn't happen

@@ -43,6 +43,17 @@ def _docx_with_inline_placeholder() -> bytes:
     return buf.getvalue()
 
 
+def _docx_with_label_form() -> bytes:
+    """Foreign-trade-style form: labels with empty fill space, no placeholders."""
+    doc = Document()
+    doc.add_paragraph("合同编号:____________________")
+    doc.add_paragraph("客户名称:")
+    doc.add_paragraph("金额:¥")
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 # ----------------------------- xlsx header-cell ----------------------------
 
 
@@ -97,8 +108,13 @@ def test_xlsx_unknown_sheet_skipped():
 
 
 def test_xlsx_inline_text_replace():
+    """Bracket placeholder inside a cell, replace mode → bracket eaten."""
     src = _xlsx_with_inline_placeholder()
-    fields = [ExtractedField(name="customer_name", label="客户", original_text="[客户名]")]
+    fields = [
+        ExtractedField(
+            name="customer_name", label="客户", original_text="[客户名]", anchor_mode="replace"
+        )
+    ]
     result = jinjaify(src, "form.xlsx", fields)
 
     wb = openpyxl.load_workbook(io.BytesIO(result.content))
@@ -129,19 +145,61 @@ def test_xlsx_inline_text_not_found():
 # ----------------------------- docx ---------------------------------------
 
 
-def test_docx_inline_text_replace():
+def test_docx_replace_mode_consumes_placeholder():
+    """Bracket-style placeholder anchored as replace → fully eaten."""
     src = _docx_with_inline_placeholder()
     fields = [
-        ExtractedField(name="customer_name", label="客户", original_text="[客户名]"),
-        ExtractedField(name="date", label="日期", original_text="[日期]"),
+        ExtractedField(
+            name="customer_name", label="客户", original_text="[客户名]", anchor_mode="replace"
+        ),
+        ExtractedField(name="date", label="日期", original_text="[日期]", anchor_mode="replace"),
     ]
     result = jinjaify(src, "po.docx", fields)
 
     doc = Document(io.BytesIO(result.content))
     paragraphs = [p.text for p in doc.paragraphs]
-    assert any("{{ customer_name }}" in t for t in paragraphs)
-    assert any("{{ date }}" in t for t in paragraphs)
+    assert any("客户:{{ customer_name }}" in t for t in paragraphs)
+    assert any("日期:{{ date }}" in t for t in paragraphs)
+    # The bracketed anchor itself must be gone — replace mode eats it.
+    assert not any("[客户名]" in t for t in paragraphs)
     assert sorted(result.applied) == ["customer_name", "date"]
+
+
+def test_docx_append_mode_default_keeps_label():
+    """Real-world foreign-trade template: label + blank → label survives."""
+    src = _docx_with_label_form()
+    fields = [
+        # Underscore string treated as placeholder content — replace.
+        ExtractedField(
+            name="contract_no",
+            label="合同编号",
+            original_text="合同编号:____________________",
+            anchor_mode="append",
+        ),
+        # Default append mode keeps the label intact.
+        ExtractedField(name="customer_name", label="客户名称", original_text="客户名称:"),
+        ExtractedField(name="amount", label="金额", original_text="金额:¥"),
+    ]
+    result = jinjaify(src, "form.docx", fields)
+    doc = Document(io.BytesIO(result.content))
+    paragraphs = [p.text for p in doc.paragraphs]
+
+    # Append mode: anchor stays, jinja appended after it.
+    assert any("合同编号:____________________{{ contract_no }}" in t for t in paragraphs)
+    assert any("客户名称:{{ customer_name }}" in t for t in paragraphs)
+    assert any("金额:¥{{ amount }}" in t for t in paragraphs)
+    assert sorted(result.applied) == ["amount", "contract_no", "customer_name"]
+
+
+def test_docx_anchor_mode_default_is_append():
+    """Field constructed without anchor_mode defaults to "append"."""
+    src = _docx_with_label_form()
+    f = ExtractedField(name="customer_name", label="客户名称", original_text="客户名称:")
+    # Defaulting is verified via the rendered output rather than the field.
+    result = jinjaify(src, "form.docx", [f])
+    doc = Document(io.BytesIO(result.content))
+    rendered = next(p.text for p in doc.paragraphs if "客户名称" in p.text)
+    assert rendered == "客户名称:{{ customer_name }}"
 
 
 def test_docx_cell_anchor_field_unsupported():

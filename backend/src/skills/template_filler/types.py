@@ -8,6 +8,7 @@ get validation + JSON schema for free.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -28,24 +29,35 @@ class FieldType(str, Enum):
 
 
 class ExtractedField(BaseModel):
-    """One AI-detected fillable placeholder.
+    """One AI-detected fillable position in a template.
 
-    Two complementary modes — exactly one is normally populated for a
-    given field:
+    The target users (foreign-trade clerks) don't know what placeholders
+    are — they fill data into Word/Excel templates that have *labels and
+    blank space*, not `[XXX]` markers. Two modes cover the real shapes:
 
-      • Inline-text mode:    `original_text` is the verbatim placeholder
-        substring (`[客户名]`, `<日期>`, etc.). Renderer does a paragraph-
-        level text replace on the source.
+      • Docx label-anchor mode (`original_text` + `anchor_mode`):
+          The LLM identifies a label or placeholder substring. `anchor_mode`
+          decides whether jinjaify keeps the anchor or eats it:
 
-      • Header-cell mode:    `cell_anchor` is the *data-row* cell address
-        (e.g. `Sheet1!B2`) where the value should land. Used for "header
-        + blank rows" templates where the user intends column headers as
-        labels and the data rows as where the AI fills values. Renderer
-        writes `{{ name }}` directly into that cell, leaving headers intact.
+            - "append" (default): the anchor *is* the label and we want it
+              preserved. Example: `original_text="客户名称:"` →
+              ``客户名称:{{ customer_name }}``. Used when the label has
+              meaning the user expects to keep ("Customer Name:", "Date:").
 
-    A field with neither populated is rejected at jinjaify time. A field
-    with both populated is rendered via cell_anchor (exact location wins
-    over text search).
+            - "replace": the anchor is a placeholder string with no
+              standalone meaning. Example: `original_text="________"`,
+              `original_text="在此填入客户名"`, or `original_text="[客户名]"`.
+              jinjaify drops the anchor entirely and writes `{{ name }}`.
+
+      • Xlsx header-cell mode (`cell_anchor`):
+          `cell_anchor` is a data-row cell address (e.g. `Sheet1!B2`).
+          Renderer writes `{{ name }}` directly into that cell, leaving
+          column headers intact. Used for "header row + blank rows" entry
+          forms typical in Excel templates.
+
+    A field with neither original_text nor cell_anchor is rejected at
+    jinjaify time. A field with both populated takes the cell_anchor path
+    (exact location wins over text search).
     """
 
     name: str = Field(
@@ -57,7 +69,18 @@ class ExtractedField(BaseModel):
     required: bool = True
     original_text: str = Field(
         default="",
-        description="Inline-text mode: verbatim placeholder string in the source template. Empty when the field is in header-cell mode.",
+        description="Docx label-anchor mode: the substring jinjaify will search for in paragraphs. Combined with anchor_mode to decide whether the anchor is preserved or replaced. Empty when in xlsx header-cell mode.",
+    )
+    anchor_mode: Literal["append", "replace"] = Field(
+        default="append",
+        description=(
+            "How jinjaify treats original_text once found. "
+            '"append" keeps the anchor and writes the jinja tag after it '
+            '(label-style: "客户:" → "客户:{{ customer_name }}"). '
+            '"replace" eats the anchor entirely and writes the tag in its '
+            'place (placeholder-style: "____" → "{{ field }}"). '
+            "Ignored when cell_anchor is set."
+        ),
     )
     cell_anchor: str | None = Field(
         default=None,

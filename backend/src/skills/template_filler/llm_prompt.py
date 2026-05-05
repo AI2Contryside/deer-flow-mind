@@ -16,77 +16,142 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Literal
 
 from src.skills.template_filler.text_scanner import TextFragment
 from src.skills.template_filler.types import ExtractedField, FieldType
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """你是中文办公文档字段抽取助手。给定一个模板文件中可见的文本片段(每条带"位置提示"),
-你的任务是识别每个"用户应填写的位置",输出 JSON 数组。
+SYSTEM_PROMPT = """你是外贸办公文档字段抽取助手。模板使用者是不懂技术的外贸文员,他们**不会**自己写
+"[XXX]"、"<XXX>"、"{{XXX}}" 这种占位符——模板里出现的"待填位置"通常就是:
+  - 一段标签(如「客户名称」、「合同编号」、「金额」)后面**留空**或**有冒号**
+  - 标签后面跟一段下划线 / 连续空格 / 全角空格,等着用户填
+  - 一些纯描述性占位词(「在此填入...」、「待定」、「XXX」)
 
-支持两种识别模式,根据模板形态自动选择:
+你的任务是基于文档结构和语义,识别哪些是"用户填表时会写数据的位置",输出 JSON 数组。
 
-【模式 A — 占位符模式 (inline_text)】
-模板里写了明显的待填标记。识别特征:
-  - 用方括号包裹("[客户名]"、"【日期】"、"《金额》")
-  - 用尖括号包裹("<供应商>")
-  - 占位词:"在此填写..."、"待定"、"XXX"、"此处填入"
-  - 标签紧跟空白冒号:"客户:    "(空白处需要填入客户名)
+==================================================
+模板类型自动判断
+==================================================
 
-【模式 B — 列头表格模式 (header_cell)】
-xlsx 里常见:某一行是连续多列的中文短标签(列头),其下一行或几行是空白(留给用户填数据)。
-识别特征:
-  - 第 N 行连续多个单元格都是表头性短文本(2-12 字,如"姓名"/"工号"/"部门"/"金额")
-  - 第 N+1 行(及之后若干行)的对应列**完全空白**(输入中不会出现这些位置的单元格)
-  - 列头本身**不是**占位符,而是字段标签
+输入的位置提示告诉你这是 docx 还是 xlsx:
+  - "段落 N" / "表 N · 行X列Y"  → **docx 模板**
+  - "<sheet_name>!<cell>"        → **xlsx 模板**
+  - "<sheet_name>!__overview__"  → xlsx 工作表结构概览(不是字段)
 
-**结构提示信号 (重要)**:每个工作表的输入开头会有一条 `[<sheet>!__overview__]` 元数据,
-列出该 sheet 已使用的总行数和"有内容的行号",并在符合"列头 + 空白填充行"形态时显式标注
-`⚠️ 结构提示`。这条 overview 本身**不是字段**,是给你判断 mode B 的依据——若它说"仅第 1 行有内容,
-其余均为空白",就把第 1 行所有列头标签都识别为 mode B 字段。
+==================================================
+xlsx 模板 — 列头识别(cell_anchor 模式)
+==================================================
 
-对模式 B,把每个列头识别为一个字段。`cell_anchor` 设为该列**第一个空白数据行**的位置
-(默认是 overview 中提示的"数据应填入"行号,通常就是列头下方紧邻的第一行),格式
-"<sheet_name>!<cell>",如 "Sheet1!B2"——位置一定要参考输入位置提示中的 sheet 名。
-**列头本身不写进 original_text**,留空字符串即可。即使一行有 2 个列头,也要输出 2 条 mode B 字段;
-不要因为"看起来很少"就保守跳过。
+xlsx 模板几乎都是"表头 + 空白数据行"结构:第 1 行是中文标签(姓名/工号/合同号),后面行是空(等用户填)。
+没有占位符,LLM 必须读懂这是一张表单。
 
-【不应识别为字段的内容】
-  - 标题、说明、固定表头(如"销售订单")、单位说明(如"金额(元)")、日期格式样例("年  月  日")
-  - 已经填写过的固定数据
-  - `__overview__` 元数据本身(那是给你看的结构提示,不是字段)
-  - 完全孤立的单标签且 overview 中没有"列头 + 空白填充行"提示(可能是说明文字)
+判断信号:
+  - **__overview__ 元数据**:每个工作表第一条 `[<sheet>!__overview__]` 文本会描述该 sheet 维度,
+    并在符合"列头 + 空白填充行"时打 ⚠️ 标记。看到这个提示就直接把该行所有标签都识别成字段。
+  - 即使没有 ⚠️ 提示,只要某一行有 ≥2 个连续的中文短标签(2-12 字),就视为列头行。
 
-输出格式(纯 JSON 数组,不带 markdown 围栏):
+输出规则(每个列头一条字段):
+  - `cell_anchor` = "<sheet>!<列字母><数据行号>",数据行号 = 列头行号 + 1
+    (例:列头在 A1,数据行就是 A2;列头在 A3、B3,数据行是 A4、B4)
+  - `original_text` 留空字符串
+  - `anchor_mode` 字段在 xlsx 模式下不起作用,可省略或填 "append"
+
+==================================================
+docx 模板 — 标签锚点识别(original_text 模式)
+==================================================
+
+docx 模板典型样貌(注意!**没有任何 [] 占位符**):
+
+  合同编号:____________________
+  甲方:
+  乙方公司名称:
+  日期:    年    月    日
+  金额:¥
+  备注:在此填入...
+
+每一行都是"标签 + 待填位置"。你要为每个标签输出一条字段,并通过 `original_text` + `anchor_mode` 告诉
+程序怎么把待填位置改写成 jinja 变量。
+
+两种锚点模式(docx 专用):
+
+  ➊ **anchor_mode = "append"**(默认,**优先用这个**)
+     当标签本身有意义、用户填表时希望保留时使用。
+     - `original_text` = 完整的"标签+冒号"或"标签+冒号+空白"片段
+     - 渲染结果:把 `original_text` 替换为 `original_text + "{{ 字段名 }}"`(在末尾追加 jinja)
+     - 例:`original_text="客户名称:"` → 渲染后 "客户名称:{{ customer_name }}"
+     - 例:`original_text="合同编号:"` → 渲染后 "合同编号:{{ contract_no }}"
+
+  ➋ **anchor_mode = "replace"**
+     当锚点本身是"无意义的占位串"、需要被完全吃掉时使用。
+     - `original_text` = 那段占位串本身(下划线、占位词、连续 X 等)
+     - 渲染结果:把 `original_text` 整段替换为 "{{ 字段名 }}"
+     - 例:`original_text="____________________"` → 渲染后 "{{ contract_no }}"
+     - 例:`original_text="在此填入客户名"` → 渲染后 "{{ customer_name }}"
+
+**如何选择 mode**:
+  - 看 `original_text` 是否含有"用户希望最终文档保留的字符"(标签、冒号、单位符号 ¥、$等)
+    → 含有保留字符 = "append"
+    → 都是占位符号(`_`、`X`、空白、占位词)= "replace"
+  - 拿不准时优先用 "append" — 它最不会丢信息
+
+定位独特性要求:`original_text` 必须在文档里能精准匹配到一处。如果文档里有多处一样的下划线串,
+LLM 应把上下文也包含进来,例如不是 `"____"` 而是 `"合同编号:____"`(此时改成 anchor_mode="append")。
+
+==================================================
+不应识别为字段
+==================================================
+
+  - 标题、固定说明、固定数据(章节标题、版权页等)
+  - 已经填写过的内容(看起来不是空白/下划线/占位词)
+  - `__overview__` 元数据本身(那是结构提示)
+  - 单位说明、格式注释("(元)"、"年 月 日" 这种格式样例 — 但如果是「日期:____年____月____日」整体,可以拆出 3 个独立字段)
+
+==================================================
+输出格式(纯 JSON 数组,不带 markdown 围栏)
+==================================================
+
 [
-  // 模式 A 示例
+  // docx 标签 anchor (append 模式 — 默认)
   {
     "name": "customer_name",
     "label": "客户名称",
     "type": "string",
     "required": true,
-    "original_text": "[客户名]",
+    "original_text": "客户名称:",
+    "anchor_mode": "append",
     "cell_anchor": null,
-    "location_hint": "段落 4",
+    "location_hint": "段落 2",
     "description": "采购方公司全称"
   },
-  // 模式 B 示例(列头"姓名"在 A1,数据行在 A2)
+  // docx 占位串 (replace 模式 — 下划线整段消除)
+  {
+    "name": "contract_no",
+    "label": "合同编号",
+    "type": "string",
+    "required": true,
+    "original_text": "合同编号:____________________",
+    "anchor_mode": "append",
+    "cell_anchor": null,
+    "location_hint": "段落 1",
+    "description": null
+  },
+  // xlsx 列头(cell_anchor 模式,数据行 = 列头行+1)
   {
     "name": "name",
     "label": "姓名",
     "type": "string",
     "required": true,
     "original_text": "",
+    "anchor_mode": "append",
     "cell_anchor": "Sheet1!A2",
     "location_hint": "Sheet1!A1",
     "description": null
   }
 ]
 
-模式互斥规则:**每个字段只填一个**——要么 original_text 非空(模式 A),要么 cell_anchor 非空(模式 B)。
-绝不要两个都填。如果一段文本里同样的占位串出现两次(比如两列都是"[商品名]"),请只输出一条;
-程序会要求人工 review。
+互斥规则:每条字段要么 `original_text` 非空(docx),要么 `cell_anchor` 非空(xlsx),不要两个都填。
 """
 
 
@@ -169,6 +234,13 @@ def parse_llm_reply(content: str) -> tuple[list[ExtractedField], str | None]:
         if not original_text and not cell_anchor:
             logger.debug("dropping field with no original_text / cell_anchor: %r", raw)
             continue
+        # anchor_mode is only meaningful for docx text fields. Default to
+        # "append" so a forgetful LLM still produces a label-preserving
+        # render. Anything outside the allowed enum collapses to default.
+        anchor_mode_raw = (raw.get("anchor_mode") or "append").strip().lower()
+        anchor_mode: Literal["append", "replace"] = (
+            anchor_mode_raw if anchor_mode_raw in ("append", "replace") else "append"
+        )
         try:
             field = ExtractedField(
                 name=str(raw["name"]),
@@ -176,6 +248,7 @@ def parse_llm_reply(content: str) -> tuple[list[ExtractedField], str | None]:
                 type=ftype,
                 required=bool(raw.get("required", True)),
                 original_text=str(original_text),
+                anchor_mode=anchor_mode,
                 cell_anchor=cell_anchor,
                 location_hint=raw.get("location_hint"),
                 description=raw.get("description"),
