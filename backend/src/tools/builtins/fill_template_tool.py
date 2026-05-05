@@ -82,8 +82,9 @@ def _download_jinja_template(url: str) -> bytes:
 def fill_template_tool(
     runtime: ToolRuntime[ContextT, ThreadState],
     output_name: str,
-    data: dict[str, Any],
     tool_call_id: Annotated[str, InjectedToolCallId],
+    data: dict[str, Any] | None = None,
+    data_list: list[dict[str, Any]] | None = None,
 ) -> Command:
     """Render the user-selected template with the supplied data and present the result.
 
@@ -98,15 +99,27 @@ def fill_template_tool(
     - The user only wants partial information — render a small markdown / text
       file rather than burning a templated artifact.
 
+    Single vs multi-row:
+    - **xlsx + multiple records** (e.g. several employees, many line items):
+      pass `data_list=[{...}, {...}]` — the tool replicates the template's
+      seed row per dict and produces a SINGLE xlsx with N data rows.
+      DO NOT call this tool once per row; one call covers the whole table.
+    - **xlsx + single record**, **docx**: pass `data={...}`. For docx, list
+      input collapses to the first dict (docx has no row-loop concept).
+
     Args:
         output_name: filename for the generated artifact (e.g.
             "PO-Acme-2026-01.xlsx"). The extension MUST match the source
             template's type (.docx for word, .xlsx for excel) — the renderer
             picks the engine based on this name.
-        data: dict whose keys MUST match `selected_template.fields[i].name`.
+        data: single record. Keys MUST match `selected_template.fields[i].name`.
             Values are stringified for substitution. Keys not in
             `selected_template.fields` are silently ignored; fields the
-            user marked as required should not be omitted.
+            user marked as required should not be omitted. Mutually
+            exclusive with `data_list` — pass exactly one.
+        data_list: multiple records, one per row in the rendered xlsx. Each
+            dict follows the same schema as `data`. Use this whenever the
+            user gives you a batch of records for an xlsx template.
     """
     state = runtime.state or {}
     selected = state.get("selected_template")
@@ -125,6 +138,23 @@ def fill_template_tool(
             "selected_template is malformed (missing template_id or jinja_download_url)",
         )
 
+    # Resolve the data argument: data_list wins when given (lets the LLM
+    # pass a batch in one call). Both empty / both set are user errors;
+    # one set wins is the expected path. data_list takes precedence so a
+    # confused model sending both still picks the multi-row shape on
+    # xlsx rather than silently dropping rows.
+    effective_data: dict[str, Any] | list[dict[str, Any]]
+    if data_list is not None:
+        if not isinstance(data_list, list) or any(not isinstance(d, dict) for d in data_list):
+            return _error_command(tool_call_id, "data_list must be a list of dicts")
+        effective_data = data_list
+    elif data is not None:
+        if not isinstance(data, dict):
+            return _error_command(tool_call_id, "data must be a dict")
+        effective_data = data
+    else:
+        return _error_command(tool_call_id, "must pass either `data` or `data_list`")
+
     # 1. Download the jinja-tagged template.
     try:
         jinja_bytes = _download_jinja_template(template_url)
@@ -134,7 +164,7 @@ def fill_template_tool(
 
     # 2. Render with the supplied data.
     try:
-        rendered = fill_template_bytes(jinja_bytes, output_name, data)
+        rendered = fill_template_bytes(jinja_bytes, output_name, effective_data)
     except TemplateFillError as exc:
         return _error_command(tool_call_id, f"render failed: {exc}")
 

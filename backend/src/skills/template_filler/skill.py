@@ -36,7 +36,7 @@ class TemplateFillError(RuntimeError):
 def fill_template_bytes(
     jinja_bytes: bytes,
     output_name: str,
-    data: dict[str, Any],
+    data: dict[str, Any] | list[dict[str, Any]],
 ) -> RenderResult:
     """Render a jinja-tagged template into the final document bytes.
 
@@ -48,9 +48,11 @@ def fill_template_bytes(
         output_name: filename the renderer uses for extension-based
             dispatch. The bytes don't change — this is metadata for
             picking docx vs xlsx and for the eventual OSS object key.
-        data: jinja context. Keys must match the field schema's
-            `name` values; missing keys cause docxtpl to substitute an
-            empty string by default.
+        data: jinja context. Either a single dict (one record substituted
+            into the seed row) or a list of dicts (xlsx only — replicate
+            the seed row once per item to produce a multi-row table). For
+            docx, list inputs collapse to the first dict with a warning,
+            since docx has no "row-loop" concept.
 
     Returns:
         A RenderResult with rendered bytes and the OOXML mime type.
@@ -59,8 +61,23 @@ def fill_template_bytes(
         TemplateFillError: any failure during render. Wraps the
             underlying ImportError / RendererError / ValueError.
     """
+    import os
+
+    ext = os.path.splitext(output_name)[1].lower()
+    effective_data: dict[str, Any] | list[dict[str, Any]] = data
+
+    if isinstance(data, list) and ext == ".docx":
+        if not data:
+            effective_data = {}
+        else:
+            logger.warning(
+                "fill_template_bytes: docx received list[%d]; using first item only",
+                len(data),
+            )
+            effective_data = data[0]
+
     try:
-        return render_for_extension(output_name, jinja_bytes, data)
+        return render_for_extension(output_name, jinja_bytes, effective_data)
     except ImportError as exc:
         raise TemplateFillError(f"renderer dependency missing for {output_name}: {exc}") from exc
     except RendererError as exc:

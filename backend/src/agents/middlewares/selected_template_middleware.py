@@ -116,15 +116,33 @@ class SelectedTemplateMiddleware(AgentMiddleware[SelectedTemplateMiddlewareState
         lines.append("")
         lines.append("**使用方式**:")
         lines.append(
-            "1. 如果用户已提供完整字段数据,**直接调用 `fill_template(data={...})`** 生成成品文件,"
+            "1. 如果用户已提供完整字段数据,**直接调用 `fill_template`** 生成成品文件,"
             "不要再问『用户选了哪个模板』或『要生成什么』——模板和类型已确定。"
         )
         lines.append(
             "2. 缺哪些字段就具体问哪些(例:『还需要 工号 和 部门』),不要笼统地问『还需要什么数据』。"
         )
+        lines.append("3. 单条 vs 多条记录:")
+        if ftype == "excel":
+            lines.append(
+                "   - **xlsx + 多条记录**(如多个员工、多条订单行):**一次调用** "
+                "`fill_template(output_name='...xlsx', data_list=[{...}, {...}, ...])`,"
+                "工具会把每个 dict 展开为表格中的一行,产出**单个**含 N 行的 xlsx 文件。"
+                "**绝不要**为每行单独调一次,那会生成多个文件。"
+            )
+            lines.append(
+                "   - **xlsx + 单条记录**:用 `fill_template(output_name='...xlsx', data={...})`。"
+            )
+        else:
+            lines.append(
+                "   - **docx**:每条记录调一次 `fill_template(output_name='...docx', data={...})`,"
+                "生成对应数量的 docx 文件(docx 不支持表格行循环)。"
+            )
+            lines.append(
+                "   - **xlsx**(如果未来切换模板):多条记录用 `data_list=[...]` 一次性渲染成单文件。"
+            )
         lines.append(
-            "3. 数据是多行(如多个员工)时,**为每一行调用一次 `fill_template`**,生成多个文件;"
-            "或在工具支持时一次传 `data_list`。**不要**自己用 docx/xlsx 库去拼,**不要**用 `present_files`,"
+            "4. **不要**自己用 docx/xlsx 库去拼,**不要**用 `present_files`,"
             "整条链路只走 `fill_template`。"
         )
         lines.append(_BLOCK_CLOSE)

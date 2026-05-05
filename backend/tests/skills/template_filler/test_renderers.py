@@ -101,6 +101,86 @@ def test_xlsx_render_wraps_corrupt_input_as_RendererError():
         render_xlsx(b"\x00not a real xlsx", {})
 
 
+def _make_xlsx_with_header_and_seed_row() -> bytes:
+    """A typical jinjaify-output xlsx: header row 1 + tag-bearing seed row 2."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "员工"
+    ws["A1"] = "姓名"
+    ws["B1"] = "性别"
+    ws["A2"] = "{{ name }}"
+    ws["B2"] = "{{ gender }}"
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_xlsx_render_data_list_expands_seed_row():
+    """List input replicates the seed row once per dict; one workbook out."""
+    src = _make_xlsx_with_header_and_seed_row()
+    rendered = render_xlsx(
+        src,
+        [
+            {"name": "方鼎宇", "gender": "男"},
+            {"name": "方向想", "gender": "女"},
+            {"name": "李四", "gender": "男"},
+        ],
+    )
+
+    wb = openpyxl.load_workbook(io.BytesIO(rendered))
+    ws = wb["员工"]
+    # Headers preserved verbatim.
+    assert ws["A1"].value == "姓名"
+    assert ws["B1"].value == "性别"
+    # Seed row expanded into rows 2-4.
+    assert ws["A2"].value == "方鼎宇"
+    assert ws["B2"].value == "男"
+    assert ws["A3"].value == "方向想"
+    assert ws["B3"].value == "女"
+    assert ws["A4"].value == "李四"
+    assert ws["B4"].value == "男"
+
+
+def test_xlsx_render_data_list_with_one_item_renders_seed_row_only():
+    src = _make_xlsx_with_header_and_seed_row()
+    rendered = render_xlsx(src, [{"name": "Alone", "gender": "其他"}])
+    wb = openpyxl.load_workbook(io.BytesIO(rendered))
+    ws = wb["员工"]
+    assert ws["A2"].value == "Alone"
+    assert ws["B2"].value == "其他"
+    # No row 3 is written (seed row not duplicated when N=1).
+    assert ws["A3"].value is None
+
+
+def test_xlsx_render_empty_data_list_is_a_noop():
+    """Empty list leaves the template untouched (seed row stays as-is)."""
+    src = _make_xlsx_with_header_and_seed_row()
+    rendered = render_xlsx(src, [])
+    wb = openpyxl.load_workbook(io.BytesIO(rendered))
+    ws = wb["员工"]
+    # Tag survives because no expansion happened.
+    assert ws["A2"].value == "{{ name }}"
+
+
+def test_xlsx_render_data_list_substitutes_missing_keys_per_row():
+    """Per-row substitution; a missing key in one dict only affects that row."""
+    src = _make_xlsx_with_header_and_seed_row()
+    rendered = render_xlsx(
+        src,
+        [
+            {"name": "A", "gender": "男"},
+            {"name": "B"},  # gender missing
+        ],
+    )
+    wb = openpyxl.load_workbook(io.BytesIO(rendered))
+    ws = wb["员工"]
+    assert ws["A2"].value == "A"
+    assert ws["B2"].value == "男"
+    assert ws["A3"].value == "B"
+    # Missing key leaves the literal tag in row 3 only.
+    assert ws["B3"].value == "{{ gender }}"
+
+
 def test_render_docx_when_docxtpl_missing_raises_importerror():
     try:
         import docxtpl  # noqa: F401
