@@ -86,40 +86,81 @@ def fill_template_tool(
     data: dict[str, Any] | None = None,
     data_list: list[dict[str, Any]] | None = None,
 ) -> Command:
-    """Render the user-selected template with the supplied data and present the result.
+    """Render the user's selected template with the supplied data, return the artifact.
 
-    When to use:
-    - The current thread has a `selected_template` in state (the user picked a
-      template via the FE composer) and they've asked you to generate a
-      finalised document.
+    The thread carries a `selected_template` state field (template_id, name,
+    type, fields, signed download URL) populated by the gateway when the user
+    picks a template via the FE composer. This tool is the ONLY supported
+    way to produce an artifact based on that template — never roll your own
+    docx / xlsx, never use `present_files` for templated output.
 
-    When NOT to use:
-    - No `selected_template` is set — fall back to writing a plain file under
-      `/mnt/user-data/outputs` and calling `present_files` instead.
-    - The user only wants partial information — render a small markdown / text
-      file rather than burning a templated artifact.
+    ============================================================
+    WHEN TO CALL
+    ============================================================
+    Call this tool whenever ALL of:
+      1. The thread has `selected_template` set (a `<selected_template>` block
+         is visible in your context); AND
+      2. The user has supplied — explicitly or implicitly — enough field data
+         to fill the template (or you've decided to render a partially-filled
+         draft for them to review).
 
-    Single vs multi-row:
-    - **xlsx + multiple records** (e.g. several employees, many line items):
-      pass `data_list=[{...}, {...}]` — the tool replicates the template's
-      seed row per dict and produces a SINGLE xlsx with N data rows.
-      DO NOT call this tool once per row; one call covers the whole table.
-    - **xlsx + single record**, **docx**: pass `data={...}`. For docx, list
-      input collapses to the first dict (docx has no row-loop concept).
+    Do NOT ask "which template did you pick?" or "what type of file?" —
+    both are already known from `selected_template`. If the user is asking
+    something unrelated to the template, ignore the selection.
+
+    If required fields are missing, do not call this tool: ask
+    `ask_clarification` listing the SPECIFIC missing fields by their `label`
+    (e.g. "还需要 工号、部门"), not a generic "需要什么数据".
+
+    ============================================================
+    SINGLE RECORD vs BATCH — pick one parameter
+    ============================================================
+    The template's file type drives the choice:
+
+      • **xlsx, multiple records** (multiple employees, multiple line items,
+        any "fill a table with N rows"):
+            data_list=[{...}, {...}, ...]
+        → ONE call, ONE workbook with N rows. The tool replicates the
+        template's seed row once per dict. NEVER call once per record on
+        xlsx — that produces N separate files, which is wrong.
+
+      • **xlsx, single record** OR **docx, any record**:
+            data={...}
+        → ONE call, ONE file. docx has no row-loop concept; if the user
+        gives multiple records for a docx template, call this tool once
+        per record (each with its own `output_name`).
+
+    `data` and `data_list` are mutually exclusive — pass exactly one. If
+    you pass both, `data_list` wins.
+
+    ============================================================
+    DATA KEY CONTRACT
+    ============================================================
+    Every key in `data` (or in each dict of `data_list`) MUST match a
+    `name` listed in the `<selected_template>` block. Keys outside that
+    schema are silently ignored — they don't error, but they don't render
+    either. Required fields (marked 必填 in the block) should not be
+    omitted; the tool will leave the literal `{{ name }}` tag in the
+    output cell so a missed field is visible to the user instead of
+    silently empty.
+
+    ============================================================
+    OUTPUT NAME
+    ============================================================
+    `output_name` must end in the template's file extension (.docx or
+    .xlsx). Pick a descriptive, user-recognisable name like
+    "员工信息_2026Q1.xlsx" or "采购合同_深圳泰科_20260301.docx". Avoid
+    timestamps that aren't in the user's frame; avoid "output.xlsx".
 
     Args:
-        output_name: filename for the generated artifact (e.g.
-            "PO-Acme-2026-01.xlsx"). The extension MUST match the source
-            template's type (.docx for word, .xlsx for excel) — the renderer
-            picks the engine based on this name.
-        data: single record. Keys MUST match `selected_template.fields[i].name`.
-            Values are stringified for substitution. Keys not in
-            `selected_template.fields` are silently ignored; fields the
-            user marked as required should not be omitted. Mutually
-            exclusive with `data_list` — pass exactly one.
-        data_list: multiple records, one per row in the rendered xlsx. Each
-            dict follows the same schema as `data`. Use this whenever the
-            user gives you a batch of records for an xlsx template.
+        output_name: filename for the generated artifact. Extension MUST
+            match the source template's type (.docx / .xlsx). The renderer
+            dispatches on this extension.
+        data: single record dict. Keys must match `selected_template.fields[*].name`.
+            Mutually exclusive with `data_list`.
+        data_list: multiple records, one per row in the rendered xlsx.
+            Each dict follows the same key contract as `data`. xlsx-batch
+            shape — see the SINGLE RECORD vs BATCH section above.
     """
     state = runtime.state or {}
     selected = state.get("selected_template")
