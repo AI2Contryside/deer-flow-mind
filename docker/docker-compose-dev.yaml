@@ -100,6 +100,13 @@ services:
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_ROOT}/backend/.deer-flow
       - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_ROOT}/skills
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal
+      # Inside the docker-compose network, LangGraph is reachable via its
+      # service alias `langgraph:2024`. Outside the network (make dev,
+      # tests) the default `localhost:2024` still works because the env
+      # var is read with a fallback. The gateway needs this for the
+      # template_extraction kickoff (POST /api/template/extract_fields)
+      # which uses langgraph_sdk to create threads + start runs.
+      - DEER_FLOW_LANGGRAPH_URL=http://langgraph:2024
     env_file:
       - ../.env
     extra_hosts:

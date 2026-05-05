@@ -67,6 +67,10 @@ services:
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_HOME:-../backend/.deer-flow}
       - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_REPO_ROOT:-..}/skills
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal
+      # Inside the docker-compose network LangGraph is reachable via its
+      # service alias `langgraph:2024`. Required by the gateway's
+      # template_extraction kickoff (POST /api/template/extract_fields).
+      - DEER_FLOW_LANGGRAPH_URL=http://langgraph:2024
     env_file:
       - ../.env
     extra_hosts:
