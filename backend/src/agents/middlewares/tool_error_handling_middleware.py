@@ -95,6 +95,19 @@ def _build_runtime_middlewares(
 
         middlewares.insert(1, UploadsMiddleware())
 
+        # SelectedTemplateMiddleware piggybacks on the lead-only path
+        # (uploads + dangling-tool-call patches together identify "lead
+        # runtime"). Subagents don't read selected_template per current
+        # design, so don't inject it there. Order: after uploads so the
+        # template block appears below the file list when both are
+        # present — uploads are operational context the user just gave
+        # us, the template is a longer-lived directive about the goal.
+        from src.agents.middlewares.selected_template_middleware import (
+            SelectedTemplateMiddleware,
+        )
+
+        middlewares.insert(2, SelectedTemplateMiddleware())
+
     if include_dangling_tool_call_patch:
         from src.agents.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware
 
