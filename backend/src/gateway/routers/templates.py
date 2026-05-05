@@ -41,7 +41,12 @@ MAX_TEMPLATE_BYTES = 50 * 1024 * 1024
 # Default model used by the extractor — matches the lead agent's default
 # text model so we don't drag in vision / thinking budget for a pure text
 # task. Override via the request's `model_name` form field if needed.
-DEFAULT_EXTRACT_MODEL = "deepseek-v3.6-pro"
+#
+# Must be a `name` defined in the project's config.yaml `models:` block —
+# misspellings fail extraction silently with a "not found in config"
+# warning and an empty fields array, which looks identical to "LLM
+# returned nothing useful" on the FE.
+DEFAULT_EXTRACT_MODEL = "deepseek-v4-pro"
 
 
 class ExtractFieldsResponse(BaseModel):
