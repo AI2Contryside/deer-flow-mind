@@ -30,10 +30,22 @@ class FieldType(str, Enum):
 class ExtractedField(BaseModel):
     """One AI-detected fillable placeholder.
 
-    `original_text` is the literal substring the LLM saw in the source
-    template. The Go-side `jinja_renderer` searches for this string and
-    replaces it with `{{ name }}`. The match must be unambiguous within
-    its paragraph or it will be skipped (see jinja_renderer.SkipReason).
+    Two complementary modes — exactly one is normally populated for a
+    given field:
+
+      • Inline-text mode:    `original_text` is the verbatim placeholder
+        substring (`[客户名]`, `<日期>`, etc.). Renderer does a paragraph-
+        level text replace on the source.
+
+      • Header-cell mode:    `cell_anchor` is the *data-row* cell address
+        (e.g. `Sheet1!B2`) where the value should land. Used for "header
+        + blank rows" templates where the user intends column headers as
+        labels and the data rows as where the AI fills values. Renderer
+        writes `{{ name }}` directly into that cell, leaving headers intact.
+
+    A field with neither populated is rejected at jinjaify time. A field
+    with both populated is rendered via cell_anchor (exact location wins
+    over text search).
     """
 
     name: str = Field(
@@ -44,8 +56,12 @@ class ExtractedField(BaseModel):
     type: FieldType = FieldType.STRING
     required: bool = True
     original_text: str = Field(
-        ...,
-        description="Verbatim placeholder text in the source template. Used by the jinja-rewriter to know what to substitute.",
+        default="",
+        description="Inline-text mode: verbatim placeholder string in the source template. Empty when the field is in header-cell mode.",
+    )
+    cell_anchor: str | None = Field(
+        default=None,
+        description='Header-cell mode (xlsx only): "<sheet>!<cell>" address of the data-row cell that should hold the value, e.g. "Sheet1!B2". Mutually exclusive with original_text in normal use.',
     )
     location_hint: str | None = Field(
         default=None,

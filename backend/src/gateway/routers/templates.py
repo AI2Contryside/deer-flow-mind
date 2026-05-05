@@ -19,11 +19,14 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from src.models import create_chat_model
 from src.skills.template_filler.extractor import extract_fields
+from src.skills.template_filler.jinjaify import jinjaify
+from src.skills.template_filler.types import ExtractedField
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/template", tags=["templates"])
@@ -121,4 +124,77 @@ async def extract_fields_endpoint(
         fields=[f.model_dump(mode="json") for f in result.fields],
         warnings=[w.model_dump() for w in result.warnings],
         source_text_preview=result.source_text_preview,
+    )
+
+
+@router.post("/jinjaify")
+async def jinjaify_endpoint(
+    file: UploadFile = File(..., description="Original template (.docx / .xlsx)"),
+    fields: str = Form(..., description='JSON-encoded list of ExtractedField objects'),
+) -> Response:
+    """Rewrite an uploaded template into a jinja-tagged variant.
+
+    Called by trademind-backend/services/user::UpdateTemplateFields when
+    the user confirms the field schema. Replaces the Go-side renderer for
+    xlsx (which couldn't address blank cells by anchor) and is now the
+    single source of truth for both formats.
+
+    Response: raw bytes of the rewritten file. Per-field outcome (applied
+    / skipped + reason) is encoded in the `X-Jinjaify-Outcomes` header
+    as JSON so the caller can surface warnings without parsing the
+    binary body.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="missing filename")
+    body = await file.read()
+    if not body:
+        raise HTTPException(status_code=400, detail="empty upload")
+    if len(body) > MAX_TEMPLATE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"template too large: {len(body)} bytes, max {MAX_TEMPLATE_BYTES}",
+        )
+
+    import json as _json
+
+    try:
+        raw_fields = _json.loads(fields)
+    except _json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid fields JSON: {exc}") from exc
+    if not isinstance(raw_fields, list):
+        raise HTTPException(status_code=400, detail="fields must be a JSON array")
+
+    parsed_fields: list[ExtractedField] = []
+    for raw in raw_fields:
+        try:
+            parsed_fields.append(ExtractedField.model_validate(raw))
+        except Exception as exc:  # noqa: BLE001 — surface as 400 with detail
+            raise HTTPException(status_code=400, detail=f"invalid field: {exc}") from exc
+
+    try:
+        result = jinjaify(body, file.filename, parsed_fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("jinjaify failed for %s", file.filename)
+        raise HTTPException(status_code=500, detail=f"jinjaify failed: {exc}") from exc
+
+    outcomes_payload = _json.dumps(
+        [
+            {"name": o.name, "applied": o.applied, "reason": o.reason}
+            for o in result.outcomes
+        ],
+        ensure_ascii=False,
+    )
+    logger.info(
+        "jinjaify: file=%s fields_in=%d applied=%d skipped=%d",
+        file.filename,
+        len(parsed_fields),
+        len(result.applied),
+        len(result.skipped),
+    )
+    return Response(
+        content=result.content,
+        media_type=result.content_type,
+        headers={"X-Jinjaify-Outcomes": outcomes_payload},
     )
