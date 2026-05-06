@@ -23,6 +23,17 @@ from src.config.tool_output_config import load_tool_output_config_from_dict
 load_dotenv()
 
 
+# APP_ENV controls which per-env config file is loaded. Whitespace-trimmed and
+# lower-cased so "Prod" / "  prod  " / "PROD" all map to the same file. Default
+# is `dev` to align with the Go-side `internal/conf` loader.
+_DEFAULT_ENV = "dev"
+
+
+def _resolve_env() -> str:
+    raw = os.getenv("APP_ENV", "").strip().lower()
+    return raw or _DEFAULT_ENV
+
+
 class AppConfig(BaseModel):
     """Config for the DeerFlow application"""
 
@@ -42,7 +53,10 @@ class AppConfig(BaseModel):
         Priority:
         1. If provided `config_path` argument, use it.
         2. If provided `DEER_FLOW_CONFIG_PATH` environment variable, use it.
-        3. Otherwise, first check the `config.yaml` in the current directory, then fallback to `config.yaml` in the parent directory.
+        3. APP_ENV-aware lookup (default APP_ENV=dev): try `config.<env>.yaml` in
+           cwd, then in cwd's parent. Falls back to plain `config.yaml` in the
+           same locations when the env-specific file does not exist — this keeps
+           workspaces that haven't materialised per-env files yet working.
         """
         if config_path:
             path = Path(config_path)
@@ -55,14 +69,14 @@ class AppConfig(BaseModel):
                 raise FileNotFoundError(f"Config file specified by environment variable `DEER_FLOW_CONFIG_PATH` not found at {path}")
             return path
         else:
-            # Check if the config.yaml is in the current directory
-            path = Path(os.getcwd()) / "config.yaml"
-            if not path.exists():
-                # Check if the config.yaml is in the parent directory of CWD
-                path = Path(os.getcwd()).parent / "config.yaml"
-                if not path.exists():
-                    raise FileNotFoundError("`config.yaml` file not found at the current directory nor its parent directory")
-            return path
+            env = _resolve_env()
+            search_dirs = [Path(os.getcwd()), Path(os.getcwd()).parent]
+            # Prefer env-specific file, then fall back to base config.yaml.
+            candidates = [d / f"config.{env}.yaml" for d in search_dirs] + [d / "config.yaml" for d in search_dirs]
+            for candidate in candidates:
+                if candidate.exists():
+                    return candidate
+            raise FileNotFoundError(f"Neither `config.{env}.yaml` nor `config.yaml` found in {search_dirs[0]} or {search_dirs[1]}")
 
     @classmethod
     def from_file(cls, config_path: str | None = None) -> Self:

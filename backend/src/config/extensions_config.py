@@ -73,9 +73,12 @@ class ExtensionsConfig(BaseModel):
         Priority:
         1. If provided `config_path` argument, use it.
         2. If provided `DEER_FLOW_EXTENSIONS_CONFIG_PATH` environment variable, use it.
-        3. Otherwise, check for `extensions_config.json` in the current directory, then in the parent directory.
-        4. For backward compatibility, also check for `mcp_config.json` if `extensions_config.json` is not found.
-        5. If not found, return None (extensions are optional).
+        3. APP_ENV-aware lookup (default APP_ENV=dev): prefer
+           `extensions_config.<env>.json` in cwd then parent, fall back to
+           `extensions_config.json` in the same directories.
+        4. Backward compatibility: also check `mcp_config.json` if no
+           extensions_config.json variant is found.
+        5. If still not found, return None (extensions are optional).
 
         Args:
             config_path: Optional path to extensions config file.
@@ -94,24 +97,20 @@ class ExtensionsConfig(BaseModel):
                 raise FileNotFoundError(f"Extensions config file specified by environment variable `DEER_FLOW_EXTENSIONS_CONFIG_PATH` not found at {path}")
             return path
         else:
-            # Check if the extensions_config.json is in the current directory
-            path = Path(os.getcwd()) / "extensions_config.json"
-            if path.exists():
-                return path
+            # Avoid a circular import at module load time by importing locally.
+            from src.config.app_config import _resolve_env
 
-            # Check if the extensions_config.json is in the parent directory of CWD
-            path = Path(os.getcwd()).parent / "extensions_config.json"
-            if path.exists():
-                return path
-
-            # Backward compatibility: check for mcp_config.json
-            path = Path(os.getcwd()) / "mcp_config.json"
-            if path.exists():
-                return path
-
-            path = Path(os.getcwd()).parent / "mcp_config.json"
-            if path.exists():
-                return path
+            env = _resolve_env()
+            search_dirs = [Path(os.getcwd()), Path(os.getcwd()).parent]
+            candidates = (
+                [d / f"extensions_config.{env}.json" for d in search_dirs]
+                + [d / "extensions_config.json" for d in search_dirs]
+                # Backward compatibility: legacy mcp_config.json
+                + [d / "mcp_config.json" for d in search_dirs]
+            )
+            for candidate in candidates:
+                if candidate.exists():
+                    return candidate
 
             # Extensions are optional, so return None if not found
             return None

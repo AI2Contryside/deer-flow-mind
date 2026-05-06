@@ -1,0 +1,502 @@
+# Production configuration for the DeerFlow application.
+#
+# Selected at runtime by `APP_ENV=prod` (see backend/src/config/app_config.py).
+# Sensitive fields use `$VAR` placeholders that are resolved against the
+# process environment by AppConfig.resolve_env_variables. Each $VAR below
+# MUST be set in the systemd unit / docker-compose `environment:` block
+# before the process starts — an unset reference raises ValueError at load.
+#
+# Required env vars for prod (in addition to anything already documented
+# in .env.example):
+#   DEEPSEEK_API_KEY                      lead-agent model
+#   DASHSCOPE_API_KEY                     vision/OCR models (qwen3.6-flash, qwen-vl-plus)
+#   ALIYUN_OSS_ACCESS_KEY_ID              consumed by oss client (env, not yaml)
+#   ALIYUN_OSS_ACCESS_KEY_SECRET          consumed by oss client (env, not yaml)
+#
+# Anything not overridden here is identical to config.dev.yaml — keep them
+# aligned for non-secret fields to avoid drift.
+
+# ============================================================================
+# Models Configuration
+# ============================================================================
+# Configure available LLM models for the agent to use
+
+models:
+  # - name: glm-5
+  #   display_name: GLM-5
+  #   use: langchain_openai:ChatOpenAI
+  #   model: GLM-5
+  #   api_key: e5147fa4c34c4702b45a9e75b8d34088.tVOVg4hHDm85a4AH # Use environment variable
+  #   max_tokens: 4096
+  #   temperature: 0
+  #   base_url: https://open.bigmodel.cn/api/paas/v4/
+
+  - name: deepseek-v4-flash
+    display_name: deepseek-v4-flash
+    # PatchedChatDeepSeek wraps ChatDeepSeek to round-trip `reasoning_content`
+    # in multi-turn conversations. Required for endpoints that always emit
+    # reasoning_content (DeepSeek-reasoner, Doubao thinking, this proxy):
+    # the API rejects follow-up requests that don't echo back the prior
+    # assistant's reasoning_content with HTTP 400.
+    use: src.models.patched_deepseek:PatchedChatDeepSeek
+    model: deepseek-v4-flash
+    api_key: $DEEPSEEK_API_KEY
+    max_tokens: 40960
+    temperature: 0
+    api_base: https://api.deepseek.com
+    supports_thinking: true
+
+  # Vision models on Aliyun DashScope's OpenAI-compatible endpoint.
+  # Lead agent stays on deepseek-v4-pro so thinking is preserved.
+  #
+  # Two distinct models, two different invocation paths on purpose:
+  #
+  #   * Qwen3.6-Flash powers the `extract_trade_document` builtin
+  #     tool. Qwen3.6 Flash is a thinking-capable multimodal model;
+  #     we explicitly disable thinking via `extra_body.enable_thinking`
+  #     because OCR is a deterministic transcription task — extended
+  #     reasoning adds latency and tokens without improving fidelity,
+  #     and the tool path uses a single-shot HumanMessage payload that
+  #     can't carry reasoning_content across turns anyway.
+  #     Single tool call, one LLM round-trip, no agent loop. See
+  #     src/tools/builtins/extract_trade_document_tool.py.
+  #
+  #   * qwen-vl-plus-latest is the lighter general vision-QA model
+  #     used by the `vision-analyst` subagent for product photos /
+  #     factory shots / screenshots — situations that benefit from a
+  #     multi-turn view_image agent loop and don't need the bigger
+  #     model.
+  - name: qwen3.6-flash
+    display_name: 通义千问 Qwen3.6 Flash
+    use: langchain_openai:ChatOpenAI
+    model: qwen3.6-flash
+    api_key: $DASHSCOPE_API_KEY
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    # 模型有 1M 上下文窗口；OCR 场景（密集表格、长字段列表）需要尽量大的输出预算。
+    max_tokens: 1048576
+    temperature: 0
+    supports_vision: true
+    # Qwen3 系列 thinking 默认开启，OCR 场景不需要思维链 → 强制关闭。
+    # DashScope OpenAI-compatible endpoint 的关闭方式是 extra_body.enable_thinking=false。
+    extra_body:
+      enable_thinking: false
+    # When this model is invoked from inside a LangGraph tool node, the
+    # SSE streaming callback propagates down and langchain_openai switches
+    # to streaming. DashScope's stream chunks omit ``usage`` by default,
+    # which breaks token-usage recording for OCR. ``stream_usage=True``
+    # tells langchain_openai to attach ``stream_options.include_usage=true``
+    # so the final aggregated chunk carries the usage block.
+    stream_usage: true
+
+  - name: qwen-vl-plus-latest
+    display_name: 通义千问 VL-Plus (latest)
+    use: langchain_openai:ChatOpenAI
+    model: qwen-vl-plus-latest
+    api_key: $DASHSCOPE_API_KEY
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    max_tokens: 4096
+    temperature: 0
+    supports_vision: true
+
+# ============================================================================
+# Tool Groups Configuration
+# ============================================================================
+# Define groups of tools for organization and access control
+
+tool_groups:
+  - name: web
+  - name: file:read
+  - name: file:write
+  - name: bash
+
+# ============================================================================
+# Tools Configuration
+# ============================================================================
+# Configure available tools for the agent to use
+
+tools:
+  # Web search tool (requires Tavily API key)
+  - name: web_search
+    group: web
+    use: src.community.tavily.tools:web_search_tool
+    max_results: 5
+    # api_key: $TAVILY_API_KEY  # Set if needed
+
+  # Web search tool (requires InfoQuest API key)
+  # - name: web_search
+  #   group: web
+  #   use: src.community.infoquest.tools:web_search_tool
+  #   # Used to limit the scope of search results, only returns content within the specified time range. Set to -1 to disable time filtering
+  #   search_time_range: 10
+
+  # Web fetch tool (uses Jina AI reader)
+  - name: web_fetch
+    group: web
+    use: src.community.jina_ai.tools:web_fetch_tool
+    timeout: 10
+
+  # Web fetch tool (uses InfoQuest AI reader)
+  # - name: web_fetch
+  #   group: web
+  #   use: src.community.infoquest.tools:web_fetch_tool
+  #   # Overall timeout for the entire crawling process (in seconds). Set to positive value to enable, -1 to disable
+  #   timeout: 10
+  #   # Waiting time after page loading (in seconds). Set to positive value to enable, -1 to disable
+  #   fetch_time: 10
+  #   # Timeout for navigating to the page (in seconds). Set to positive value to enable, -1 to disable
+  #   navigation_timeout: 30
+
+  # Image search tool (uses DuckDuckGo)
+  # Use this to find reference images before image generation
+  - name: image_search
+    group: web
+    use: src.community.image_search.tools:image_search_tool
+    max_results: 5
+
+  # File operations tools
+  - name: ls
+    group: file:read
+    use: src.sandbox.tools:ls_tool
+
+  - name: read_file
+    group: file:read
+    use: src.sandbox.tools:read_file_tool
+
+  - name: write_file
+    group: file:write
+    use: src.sandbox.tools:write_file_tool
+
+  - name: str_replace
+    group: file:write
+    use: src.sandbox.tools:str_replace_tool
+
+  # Bash execution tool
+  - name: bash
+    group: bash
+    use: src.sandbox.tools:bash_tool
+
+# ============================================================================
+# Sandbox Configuration
+# ============================================================================
+# Choose between local sandbox (direct execution) or Docker-based AIO sandbox
+
+# Option 1: Local Sandbox (Default)
+# Executes commands directly on the host machine
+sandbox:
+  use: src.sandbox.local:LocalSandboxProvider
+
+# Option 2: Container-based AIO Sandbox
+# Executes commands in isolated containers (Docker or Apple Container)
+# On macOS: Automatically prefers Apple Container if available, falls back to Docker
+# On other platforms: Uses Docker
+# Uncomment to use:
+# sandbox:
+#   use: src.community.aio_sandbox:AioSandboxProvider
+#
+#   # Optional: Container image to use (works with both Docker and Apple Container)
+#   # Default: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
+#   # Recommended: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest (works on both x86_64 and arm64)
+#   # image: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
+#
+#   # Optional: Base port for sandbox containers (default: 8080)
+#   # port: 8080
+
+#   # Optional: Maximum number of concurrent sandbox containers (default: 3)
+#   # When the limit is reached the least-recently-used sandbox is evicted to
+#   # make room for new ones. Use a positive integer here; omit this field to use the default.
+#   # replicas: 3
+#
+#   # Optional: Prefix for container names (default: deer-flow-sandbox)
+#   # container_prefix: deer-flow-sandbox
+#
+#   # Optional: Additional mount directories from host to container
+#   # NOTE: Skills directory is automatically mounted from skills.path to skills.container_path
+#   # mounts:
+#   #   # Other custom mounts
+#   #   - host_path: /path/on/host
+#   #     container_path: /home/user/shared
+#   #     read_only: false
+#
+#   # Optional: Environment variables to inject into the sandbox container
+#   # Values starting with $ will be resolved from host environment variables
+#   # environment:
+#   #   NODE_ENV: production
+#   #   DEBUG: "false"
+#   #   API_KEY: $MY_API_KEY        # Reads from host's MY_API_KEY env var
+#   #   DATABASE_URL: $DATABASE_URL  # Reads from host's DATABASE_URL env var
+
+# Option 3: Provisioner-managed AIO Sandbox (docker-compose-dev)
+# Each sandbox_id gets a dedicated Pod in k3s, managed by the provisioner.
+# Recommended for production or advanced users who want better isolation and scalability.:
+# sandbox:
+#   use: src.community.aio_sandbox:AioSandboxProvider
+#   provisioner_url: http://provisioner:8002
+
+# ============================================================================
+# Subagents Configuration
+# ============================================================================
+# Configure timeouts for subagent execution
+# Subagents are background workers delegated tasks by the lead agent
+
+# subagents:
+#   # Default timeout in seconds for all subagents (default: 900 = 15 minutes)
+#   timeout_seconds: 900
+#
+#   # Optional per-agent timeout overrides
+#   agents:
+#     general-purpose:
+#       timeout_seconds: 1800  # 30 minutes for complex multi-step tasks
+#     bash:
+#       timeout_seconds: 300   # 5 minutes for quick command execution
+
+# ============================================================================
+# Skills Configuration
+# ============================================================================
+# Configure skills directory for specialized agent workflows
+
+skills:
+  # Path to skills directory on the host (relative to project root or absolute)
+  # Default: ../skills (relative to backend directory)
+  # Uncomment to customize:
+  # path: /absolute/path/to/custom/skills
+
+  # Path where skills are mounted in the sandbox container
+  # This is used by the agent to access skills in both local and Docker sandbox
+  # Default: /mnt/skills
+  container_path: /mnt/skills
+
+# ============================================================================
+# Title Generation Configuration
+# ============================================================================
+# Automatic conversation title generation settings
+
+title:
+  enabled: true
+  max_words: 6
+  max_chars: 60
+  model_name: null # Use default model (first model in models list)
+
+# ============================================================================
+# Summarization Configuration
+# ============================================================================
+# Automatically summarize conversation history when token limits are approached
+# This helps maintain context in long conversations without exceeding model limits
+
+summarization:
+  enabled: true
+
+  # Model to use for summarization (null = use default model)
+  # Recommended: Use a lightweight, cost-effective model like "gpt-4o-mini" or similar
+  model_name: null
+
+  # Trigger conditions - at least one required
+  # Summarization runs when ANY threshold is met (OR logic)
+  #
+  # IMPORTANT: `type: fraction` requires the model to expose a profile with
+  # max_input_tokens (LangChain SummarizationMiddleware enforces this). Our
+  # DeepSeek factory does not, so fraction triggers crash make_lead_agent at
+  # init time. Stick to absolute tokens / messages until model profiles are
+  # wired up in src/models/factory.py.
+  #
+  # Sized for a 1M-token model window (DeepSeek-v4-flash 1M variant).
+  # 400000 ≈ 40% of the window — late enough that the ERPNext flow
+  # (xlsx parse + SKILL.md + bash calls + tenant profile injection)
+  # doesn't summarize mid-task, early enough that the current turn still
+  # has 60% of the window to work in. Bumped from the legacy 64K-window
+  # value of 40000 (occupied 62% of a 64K window).
+  trigger:
+    - type: tokens
+      value: 400000
+
+  # Context retention policy after summarization. Token-based so a turn full of
+  # tiny tool pings doesn't get treated the same as a turn full of huge JSON
+  # tool_results. 80000 ≈ 20% of the trigger budget — enough to keep several
+  # full tool round-trips intact without re-summarizing on the next call.
+  keep:
+    type: tokens
+    value: 80000
+
+  # Maximum tokens to keep when preparing messages for summarization.
+  # MUST be ≥ (trigger - keep) so the summarizer never has to drop messages
+  # — when trim returns an empty list, langchain's SummarizationMiddleware
+  # falls back to a placeholder string and (without our SafeSummarization
+  # wrapper) wipes the entire history. With trigger=400K and keep=80K, the
+  # span to summarize is at most 320K tokens; we set this exactly there.
+  # See thread 09417ecf-... for the failure mode this guards against.
+  trim_tokens_to_summarize: 320000
+
+  # Custom summary prompt template (null = use default LangChain prompt)
+  # The prompt should guide the model to extract important context
+  summary_prompt: null
+
+# ============================================================================
+# Tool Output Handling
+# ============================================================================
+# Cap any single ToolMessage at a fixed character size and spill the original
+# payload to a file inside the sandbox workspace, so summarization can never
+# be sabotaged by a single oversized message. Pinned to thread
+# 09417ecf-b0e0-470f-ae3d-244a0b1ba74d where one giant docling+xlsx response
+# made trim_messages return [], which collapsed the entire thread history.
+tool_output:
+  truncation:
+    enabled: true
+    # 60000 chars ≈ 20K tokens — well below trim_tokens_to_summarize (320000)
+    # so even a 16-call burst of max-size tool responses fits in one summary.
+    max_chars: 60000
+    keep_head_chars: 12000
+    keep_tail_chars: 8000
+    # Subdirectory under /mnt/user-data/workspace where the original payloads land.
+    spill_dir: ".tool_outputs"
+    # Tool names exempt from truncation. Add tools whose output is already
+    # bounded / structured (e.g. view_image) — empty by default.
+    skip_tool_names: []
+
+# ============================================================================
+# Memory Configuration
+# ============================================================================
+# Global memory mechanism
+# Stores user context and conversation history for personalized responses
+# ============================================================================
+# Lead-Agent Profiles
+# ============================================================================
+# Per-task-type configuration for the lead-agent profile system.
+# Each entry maps a task_type (set via runtime.context.task_type or
+# config.configurable.task_type) to a small bundle of options.
+#
+# Section is optional — omit it entirely to keep all built-in profiles
+# enabled with no model override (legacy pre-S4 behaviour).
+#
+# Per-entry fields:
+#   enabled (bool, default true)  — disable a profile to refuse it at the
+#                                   registry level. Disabled onboarding is
+#                                   skipped by auto-routing too (handy when
+#                                   you want a tenant to chat directly
+#                                   without the first-time-setup ritual).
+#   model   (str,  optional)      — pin a specific model name from the
+#                                   `models:` block above. Beats agent_config
+#                                   and workspace default but loses to an
+#                                   explicit `model_name` in the request.
+lead_agent_profiles:
+  business:
+    enabled: true
+  tenant_onboarding:
+    enabled: true
+  template_extraction:
+    enabled: true
+  bootstrap_agent:
+    enabled: true
+
+memory:
+  enabled: true
+  storage_path: memory # Directory under Paths.base_dir (DEER_FLOW_HOME); holds memory/<tenant_id>/memory.json shards
+  debounce_seconds: 30 # Wait time before processing queued updates
+  model_name: null # Use default model
+  max_facts: 100 # Maximum number of facts to store
+  fact_confidence_threshold: 0.7 # Minimum confidence for storing facts
+  injection_enabled: true # Whether to inject memory into system prompt
+  max_injection_tokens: 2000 # Maximum tokens for memory injection
+
+# ============================================================================
+# Checkpointer Configuration
+# ============================================================================
+# Configure state persistence for the embedded DeerFlowClient.
+# The LangGraph Server manages its own state persistence separately
+# via the server infrastructure (this setting does not affect it).
+#
+# When configured, DeerFlowClient will automatically use this checkpointer,
+# enabling multi-turn conversations to persist across process restarts.
+#
+# Supported types:
+#   memory   - In-process only. State is lost when the process exits. (default)
+#   sqlite   - File-based SQLite persistence. Survives restarts.
+#              Requires: uv add langgraph-checkpoint-sqlite
+#   postgres - PostgreSQL persistence. Suitable for multi-process deployments.
+#              Requires: uv add langgraph-checkpoint-postgres psycopg[binary] psycopg-pool
+#
+# Examples:
+#
+# In-memory (default when omitted — no persistence):
+# checkpointer:
+#   type: memory
+#
+# SQLite (file-based, single-process):
+# checkpointer:
+#   type: sqlite
+#   connection_string: checkpoints.db
+#
+# PostgreSQL (multi-process, production):
+checkpointer:
+  type: postgres
+  connection_string: postgresql://root:abcABC123@10.37.6.251:5432/trademind
+
+# ============================================================================
+# IM Channels Configuration
+# ============================================================================
+# Connect DeerFlow to external messaging platforms.
+# All channels use outbound connections (WebSocket or polling) — no public IP required.
+
+# channels:
+#   # LangGraph Server URL for thread/message management (default: http://localhost:2024)
+#   langgraph_url: http://localhost:2024
+#   # Gateway API URL for auxiliary queries like /models, /memory (default: http://localhost:8001)
+#   gateway_url: http://localhost:8001
+#
+#   # Optional: default mobile/session settings for all IM channels
+#   session:
+#     assistant_id: lead_agent
+#     config:
+#       recursion_limit: 100
+#     context:
+#       thinking_enabled: true
+#       is_plan_mode: false
+#       subagent_enabled: false
+#
+#   feishu:
+#     enabled: false
+#     app_id: $FEISHU_APP_ID
+#     app_secret: $FEISHU_APP_SECRET
+#
+#   slack:
+#     enabled: false
+#     bot_token: $SLACK_BOT_TOKEN     # xoxb-...
+#     app_token: $SLACK_APP_TOKEN     # xapp-... (Socket Mode)
+#     allowed_users: []               # empty = allow all
+#
+#   telegram:
+#     enabled: false
+#     bot_token: $TELEGRAM_BOT_TOKEN
+#     allowed_users: []               # empty = allow all
+#
+#     # Optional: channel-level session overrides
+#     session:
+#       assistant_id: mobile_agent
+#       context:
+#         thinking_enabled: false
+#
+#       # Optional: per-user overrides by user_id
+#       users:
+#         "123456789":
+#           assistant_id: vip_agent
+#           config:
+#             recursion_limit: 150
+#           context:
+#             thinking_enabled: true
+#             subagent_enabled: true
+
+# ──────────────────────────────────────────────────────────────────────────
+# Aliyun OSS object storage. AK/SK MUST come from env (see .env):
+#   ALIYUN_OSS_ACCESS_KEY_ID
+#   ALIYUN_OSS_ACCESS_KEY_SECRET
+# Mirrors trademind-backend's gateway config so AI artifacts and uploads
+# land in the same buckets the desktop client downloads from. Without this
+# block, present_files silently skips the OSS push and the canvas preview
+# never receives a usable artifact URL.
+# ──────────────────────────────────────────────────────────────────────────
+oss:
+  endpoint: "oss-cn-hangzhou.aliyuncs.com"
+  region: "cn-hangzhou"
+  sys_bucket: "trademind-sys"
+  chat_bucket: "trademind-chat-session"
+  signed_url_ttl_seconds: 3600
+  max_upload_bytes: 20971520    # 20 MiB
+  avatar_max_bytes: 5242880     # 5 MiB
