@@ -427,7 +427,7 @@ memory:
 # PostgreSQL (multi-process, production):
 checkpointer:
   type: postgres
-  connection_string: postgresql://root:abcABC123@10.37.6.251:5432/trademind
+  connection_string: $CHECKPOINTER_PG_DSN
 
 # ============================================================================
 # IM Channels Configuration

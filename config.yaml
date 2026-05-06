@@ -31,7 +31,7 @@ models:
     # assistant's reasoning_content with HTTP 400.
     use: src.models.patched_deepseek:PatchedChatDeepSeek
     model: deepseek-v4-flash
-    api_key: sk-ef5c12ab10a64c8e95db534bc965d8c5 # Use environment variable
+    api_key: $DEEPSEEK_API_KEY
     max_tokens: 40960
     temperature: 0
     api_base: https://api.deepseek.com
@@ -107,10 +107,10 @@ tool_groups:
 
 tools:
   # Web search tool (requires Tavily API key)
-  - name: web_search
-    group: web
-    use: src.community.tavily.tools:web_search_tool
-    max_results: 5
+  # - name: web_search
+  #   group: web
+  #   use: src.community.tavily.tools:web_search_tool
+  #   max_results: 5
     # api_key: $TAVILY_API_KEY  # Set if needed
 
   # Web search tool (requires InfoQuest API key)
@@ -418,7 +418,7 @@ memory:
 # PostgreSQL (multi-process, production):
 checkpointer:
   type: postgres
-  connection_string: postgresql://root:abcABC123@10.37.6.251:5432/trademind
+  connection_string: $CHECKPOINTER_PG_DSN
 
 # ============================================================================
 # IM Channels Configuration
