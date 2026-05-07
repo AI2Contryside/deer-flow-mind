@@ -62,6 +62,10 @@ skills/
 backend/.venv
 backend/htmlcov
 backend/.coverage
+# Runtime state written by the running container (LangGraph thread data,
+# auth secrets). Often root-owned because the container ran as root, so
+# buildx fails to read xattrs from the host. Never belongs in an image.
+backend/.deer-flow/
 *.md
 !README.md
 !backend/README.md
