@@ -62,6 +62,7 @@ class FrappeClient:
         username: str | None = None,
         password: str | None = None,
         tenant_id: str | None = None,
+        host_header: str | None = None,
         timeout: int = DEFAULT_TIMEOUT,
         verify_ssl: bool = True,
         cookie_jar_path: Path | None = None,
@@ -89,6 +90,7 @@ class FrappeClient:
         self._username = username
         self._password = password
         self._tenant_id = normalized_tenant
+        self._host_header = (host_header or "").strip() or None
         self._logged_in = False
         self._cookie_jar_path = Path(cookie_jar_path) if cookie_jar_path else None
         # Reentrancy guard so a 401 during a re-login retry can't recurse.
@@ -99,6 +101,13 @@ class FrappeClient:
         self._session.headers.setdefault("Accept", "application/json")
         self._session.headers.setdefault("X-Frappe-CLI", "cli-anything-erpnext")
         self._session.headers["X-Tenant-ID"] = normalized_tenant
+        # Frappe routes by Host header; when ``url`` is an IP / VPC alias,
+        # the URL-derived Host won't match any bench site and Frappe 404s
+        # with "<host> does not exist". Set this to the registered site
+        # name (e.g. ``www.trademind-erpnext.com``) to make resolution
+        # work over raw connections.
+        if self._host_header:
+            self._session.headers["Host"] = self._host_header
 
         # Token auth is stateless — no cookies to persist. Username/password
         # auth survives across CLI invocations only if we hydrate the cookie
@@ -123,6 +132,7 @@ class FrappeClient:
             username=self._username,
             password=self._password,
             tenant_id=tenant_id,
+            host_header=self._host_header,
             timeout=self.timeout,
             verify_ssl=self._session.verify,
             cookie_jar_path=self._cookie_jar_path,
@@ -414,6 +424,8 @@ def client_from_env(cookie_jar_path: Path | None = None) -> FrappeClient:
       - ``ERPNEXT_API_KEY``      (preferred) + ``ERPNEXT_API_SECRET``
       - ``ERPNEXT_USERNAME``     (fallback) + ``ERPNEXT_PASSWORD``
       - ``ERPNEXT_TENANT_ID``    tenant bound to outgoing X-Tenant-ID header
+      - ``ERPNEXT_HOST_HEADER``  override outgoing Host header (set to the
+                                 bench site name when ERPNEXT_URL is an IP)
       - ``ERPNEXT_VERIFY_SSL``   ("0" to disable)
     """
     url = os.environ.get("ERPNEXT_URL")
@@ -435,6 +447,7 @@ def client_from_env(cookie_jar_path: Path | None = None) -> FrappeClient:
         username=os.environ.get("ERPNEXT_USERNAME"),
         password=os.environ.get("ERPNEXT_PASSWORD"),
         tenant_id=tenant,
+        host_header=os.environ.get("ERPNEXT_HOST_HEADER"),
         verify_ssl=os.environ.get("ERPNEXT_VERIFY_SSL", "1") != "0",
         cookie_jar_path=cookie_jar_path,
     )
