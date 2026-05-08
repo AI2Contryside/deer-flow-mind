@@ -49,13 +49,15 @@ def leaky_parent_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
 
 
 @pytest.mark.unit
-def test_subprocess_does_not_inherit_erpnext_vars_when_env_is_none(
+def test_subprocess_does_not_inherit_erpnext_secrets_when_env_is_none(
     sandbox: LocalSandbox,
     leaky_parent_env: dict[str, str],
 ) -> None:
-    # No per-call env → must NOT inherit ERPNEXT_* from parent process.
+    # No per-call env → must NOT inherit ERPNEXT secrets from parent process.
+    # ERPNEXT_URL is allowed to inherit (deployment-level fallback alongside
+    # ERPNEXT_HOST_HEADER); only api_key / api_secret / tenant_id are stripped.
     out = sandbox.execute_command('echo "URL=$ERPNEXT_URL"; echo "KEY=$ERPNEXT_API_KEY"; echo "SECRET=$ERPNEXT_API_SECRET"; echo "TENANT=$ERPNEXT_TENANT_ID"')
-    assert "URL=" in out and "leaked-from-parent" not in out
+    assert "URL=http://leaked-from-parent.example" in out
     assert "KEY=" in out and "leaked-key" not in out
     assert "SECRET=" in out and "leaked-secret" not in out
     assert "TENANT=" in out and "999" not in out

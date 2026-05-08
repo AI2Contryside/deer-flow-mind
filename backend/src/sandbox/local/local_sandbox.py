@@ -14,8 +14,15 @@ from src.sandbox.sandbox import Sandbox
 # (a command the gate correctly returned ``{}`` for) and bash still printed
 # "yes" because the parent process's ``os.environ`` carried the value through
 # ``subprocess.run(env=None)``. The gate is one layer; this is the second.
+#
+# ``ERPNEXT_URL`` is NOT in this list: the site URL is not a secret (it's a
+# public hostname / VPC IP, not exfil-worthy on its own), and operators want
+# it set in ``.env`` as a deployment-level fallback alongside
+# ``ERPNEXT_HOST_HEADER``. The per-call injection in
+# ``tools._extract_erpnext_env`` still overrides any inherited URL when the
+# gateway has supplied per-user credentials, so behaviour is unchanged on
+# the happy path.
 _FORBIDDEN_INHERITED_ENV = (
-    "ERPNEXT_URL",
     "ERPNEXT_API_KEY",
     "ERPNEXT_API_SECRET",
     "ERPNEXT_TENANT_ID",
