@@ -486,8 +486,8 @@ checkpointer:
 oss:
   endpoint: "oss-cn-hangzhou.aliyuncs.com"
   region: "cn-hangzhou"
-  sys_bucket: "trademind-sys"
-  chat_bucket: "trademind-chat-session"
+  sys_bucket: "trademind-sys-dev"
+  chat_bucket: "trademind-chat-session-dev"
   signed_url_ttl_seconds: 3600
   max_upload_bytes: 20971520    # 20 MiB
   avatar_max_bytes: 5242880     # 5 MiB
