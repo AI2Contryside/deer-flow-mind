@@ -16,6 +16,8 @@ Mirror of ``selling``, but from the supplier side::
 
 from __future__ import annotations
 
+import hashlib
+
 from ..core.client import FrappeClient
 from ._common import (
     apply_overrides,
@@ -24,6 +26,63 @@ from ._common import (
     normalize_items,
     submit_if_draft,
 )
+
+# ── Idempotency helpers ────────────────────────────────────────────────
+#
+# Pinned against the 2026-05-02 incident where an LLM agent retry against
+# a transient psycopg2.errors.SerializationFailure inserted the same
+# Purchase Order three times in 49 seconds; combined with a frappe
+# error-handling bug (see frappe/utils/error.py:128) this leaked one
+# `idle in transaction (aborted)` PG backend per retry, accumulating to
+# 92 stale connections and exhausting max_connections=100 on dev.
+#
+# The fix at this layer: stamp every newly-inserted PO's `remarks` with a
+# deterministic `po-dedup-key:<hash>` marker derived from
+# (supplier, schedule_date, normalized items). On a repeat call with
+# identical inputs we look up the existing PO and return it instead of
+# POSTing again. Cancelled POs (docstatus 2) are excluded from the
+# lookup so an explicit cancel-then-recreate flow still works.
+_DEDUP_KEY_PREFIX = "po-dedup-key:"
+
+
+def _po_fingerprint(supplier: str, items: list[dict], schedule_date: str | None) -> str:
+    """Deterministic 16-char hash of the business-meaningful PO inputs.
+
+    Order-independent over rows so two calls with the same items in
+    different order collapse to the same fingerprint.
+    """
+    rows = sorted(
+        (
+            str(r.get("item_code", "")),
+            str(r.get("qty", "")),
+            str(r.get("rate", "")),
+            str(r.get("warehouse", "")),
+        )
+        for r in items
+    )
+    payload = repr((supplier, schedule_date or "", rows))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _find_existing_po(
+    client: FrappeClient, supplier: str, fingerprint: str
+) -> dict | None:
+    """Return an existing draft or submitted PO whose remarks embed the
+    fingerprint, or None. Cancelled POs are ignored on purpose."""
+    marker = f"{_DEDUP_KEY_PREFIX}{fingerprint}"
+    candidates = client.get_list(
+        "Purchase Order",
+        filters=[
+            ["supplier", "=", supplier],
+            ["docstatus", "in", [0, 1]],
+            ["remarks", "like", f"%{marker}%"],
+        ],
+        fields=["name"],
+        limit=1,
+    )
+    if not candidates:
+        return None
+    return client.get_doc("Purchase Order", candidates[0]["name"])
 
 
 # ── Primitives ────────────────────────────────────────────────────────
@@ -74,11 +133,26 @@ def create_purchase_order(
     submit: bool = True,
     extra: dict | None = None,
 ) -> dict:
-    """Create a Purchase Order. Submits by default."""
+    """Create a Purchase Order. Submits by default.
+
+    Idempotent on the tuple ``(supplier, schedule_date, items)``: a
+    repeat call with identical inputs returns the existing draft or
+    submitted PO instead of inserting a duplicate. See module-level
+    ``_DEDUP_KEY_PREFIX`` for the rationale and incident pin.
+    """
     rows = normalize_items(items)
     if schedule_date:
         for r in rows:
             r.setdefault("schedule_date", schedule_date)
+
+    fingerprint = _po_fingerprint(supplier, rows, schedule_date)
+    existing = _find_existing_po(client, supplier, fingerprint)
+    if existing is not None:
+        if submit and int(existing.get("docstatus", 0)) == 0:
+            client.submit("Purchase Order", existing["name"])
+            existing = client.get_doc("Purchase Order", existing["name"])
+        return existing
+
     doc = {
         "doctype": "Purchase Order",
         "supplier": supplier,
@@ -89,6 +163,11 @@ def create_purchase_order(
     if currency: doc["currency"] = currency
     if transaction_date: doc["transaction_date"] = transaction_date
     if extra: doc.update(extra)
+
+    marker = f"{_DEDUP_KEY_PREFIX}{fingerprint}"
+    caller_remarks = (doc.get("remarks") or "").rstrip()
+    doc["remarks"] = f"{caller_remarks}\n{marker}" if caller_remarks else marker
+
     created = client.insert(doc)
     if submit:
         client.submit("Purchase Order", created["name"])
