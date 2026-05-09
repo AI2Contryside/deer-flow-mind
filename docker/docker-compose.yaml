@@ -18,6 +18,22 @@
 # Set LANGCHAIN_TRACING_V2=true and LANGSMITH_API_KEY in .env to enable it.
 #
 # Access: http://localhost:${PORT:-2026}
+#
+# Logging: every service uses the same json-file rotation policy below.
+# Without this, dockerd's default json-file driver runs unbounded and
+# /var/lib/docker/containers/*/*-json.log grows until disk fills. Pinned
+# after the 2026-05-02 PG-leak post-mortem when
+# `docker logs deer-flow-langgraph --since 2026-05-02T22:00` came back
+# empty: the older container had been replaced and its (much larger,
+# unrotated) json.log was reaped with the old container ID. With
+# rotation we lose deep history *predictably* (per-container 50MB cap)
+# but never lose the recent trailing window.
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 services:
   # ── Reverse Proxy ──────────────────────────────────────────────────────────
@@ -28,12 +44,20 @@ services:
       - "${PORT:-2026}:2026"
     volumes:
       - ./nginx/${NGINX_CONF:-nginx.conf}:/etc/nginx/nginx.conf:ro
+      # Bind-mount nginx access/error logs to the repo's logs/ dir so the
+      # request-level history survives container down/up cycles. nginx.conf
+      # writes to /var/log/nginx/*.log AND /dev/stdout — keeping stdout
+      # means `docker logs` / `make docker-logs` continues to work for
+      # interactive debugging, while the file copy is what
+      # auditing/grep/awk needs. Host dir is created during deploy.
+      - ${DEER_FLOW_LOG_DIR:-../logs}/nginx:/var/log/nginx
     depends_on:
       - gateway
       - langgraph
     networks:
       - deer-flow
     restart: unless-stopped
+    logging: *default-logging
 
   # ── Gateway API ────────────────────────────────────────────────────────────
   gateway:
@@ -78,6 +102,7 @@ services:
     networks:
       - deer-flow
     restart: unless-stopped
+    logging: *default-logging
 
   # ── LangGraph Server ───────────────────────────────────────────────────────
   # TODO: switch to langchain/langgraph-api (licensed) once a license key is available.
@@ -120,6 +145,7 @@ services:
     networks:
       - deer-flow
     restart: unless-stopped
+    logging: *default-logging
 
   # ── Sandbox Provisioner (optional, Kubernetes mode) ────────────────────────
   provisioner:
@@ -151,6 +177,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
+    logging: *default-logging
+
 networks:
   deer-flow:
     driver: bridge
