@@ -50,15 +50,8 @@ This tenant ({tenant_id}) does not have a ``profile.json`` yet.
 
 Tenant id: {tenant_id} (use this EXACT string in phase 3 ``write_profile`` — do not improvise)
 {company_line}
-<phase_1_channel_selection>
-List ``/mnt/user-data/uploads`` first via ``bash``.
-
-  - **Files present** → Excel/hybrid path. For each upload:
-    * Prefer the structured ``*.docling.json`` sibling for header / table extraction (preserves cell row/col spans, heading levels, per-sheet table boundaries). Fall back to the raw file only if the sidecar is missing. ``*.docling.summary.json`` has up-front row/col counts — read it before the full JSON.
-    * For very large spreadsheets (>50k rows or >20MB), do NOT load the docling JSON into context — write Python (``duckdb.sql("SELECT … FROM read_xlsx(path, sheet=, range=)")``, ``pandas.read_excel(path, engine='calamine')``, or ``openpyxl.load_workbook(path, read_only=True).iter_rows(...)``).
-    * Identify the doctype (Customer / Supplier / Item / Item Price / Warehouse / Account). If ambiguous, call ``ask_clarification`` with the file name and a candidate list — don't guess.
-    * Cap at 200 rows per file in v1 seed; tell the user if you truncate.
-  - **No uploads** → pure Q&A path; walk the dynamic question plan below.
+<phase_1_question_plan>
+Onboarding is question-only. **Do NOT inspect** ``/mnt/user-data/uploads`` at this stage — even if files happen to be there, ignore them. Master data import is the user's call later, not an implicit branch in onboarding.
 
 Question plan is **three phases**, in order:
   1. **Meta** (`primary_categories`, then `detailed_scenarios`) — routes which scenario packs apply.
@@ -67,8 +60,8 @@ Question plan is **three phases**, in order:
 
 {question_bank_block}
 
-Ask T1 questions in **batches of 3-5** via ``ask_clarification`` (``clarification_type="missing_info"``). Never ask one at a time (slow), never all at once (overwhelming). After each answer batch, re-derive the next questions by calling ``build_question_plan(answers)`` from ``src.agents.tenant_onboarding.question_bank`` — do NOT hand-pick from a static list. Skip questions whose answer is already implied by an upload. Re-asking already-answered questions is the #1 onboarding-survey complaint — avoid it.
-</phase_1_channel_selection>
+Ask T1 questions in **batches of 3-5** via ``ask_clarification`` (``clarification_type="missing_info"``). Never ask one at a time (slow), never all at once (overwhelming). After each answer batch, re-derive the next questions by calling ``build_question_plan(answers)`` from ``src.agents.tenant_onboarding.question_bank`` — do NOT hand-pick from a static list. Re-asking already-answered questions is the #1 onboarding-survey complaint — avoid it.
+</phase_1_question_plan>
 
 <phase_2_erpnext_seeding>
 Use ONLY the ``erpnext-cli`` skill via ``bash``. Read ``/mnt/skills/public/erpnext-cli/SKILL.md`` first if you haven't this session. The CLI handles ``X-Tenant-ID`` and credential injection from env vars the runtime sets — do NOT echo or look for them.
@@ -80,13 +73,10 @@ Order matters because ERPNext has hard prerequisites:
   3. **Default Warehouse** — "Stores" leaf under the auto-created "All Warehouses - <ABBR>". Some scenario packs (e.g. ``import_export``, ``physical_store``) extend this with their own structure — see the per-scenario blueprint below.
   4. **Default Price List** — "Standard Selling". Brokerage seeds one per selling/buying currency (per the scenario blueprint). Skip names that already exist.
   5. **Per-scenario blueprints** — call ``collect_erpnext_init_blueprints(answers)`` (from ``src.agents.tenant_onboarding.composer``) for the declarative shape of each picked scenario; feed each to ``erpnext-cli``. Idempotent.
-  6. **Master data from uploads**, in this exact order (each layer depends on the previous):
-     a. Suppliers (no upstream prereqs)
-     b. Customers (no upstream prereqs)
-     c. Items (uses default Item Group "All Item Groups" if none specified)
-     d. Item Prices (depends on Items + Price List)
 
-For every batch report a short receipt: ``N created, M skipped (already existed), K failed``. Accumulate failed-row reasons into the ``open_questions`` you'll feed to phase 3. Do NOT abort onboarding on partial failure — one bad Customer row must not stop Items.
+Onboarding seeds **structural masters only** (Company / Warehouse / Price List / scenario blueprints). Customers / Suppliers / Items / Item Prices are imported by the user later in a normal chat turn — do NOT scan uploads for them here, and leave ``imported`` empty in phase 3 unless a step above actually created a record.
+
+For every batch report a short receipt: ``N created, M skipped (already existed), K failed``. Accumulate failed-row reasons into the ``open_questions`` you'll feed to phase 3. Do NOT abort onboarding on partial failure.
 
 After 3 consecutive same-error CLI failures, STOP and surface the literal error. The runtime is deliberately non-self-healing.
 </phase_2_erpnext_seeding>
@@ -96,8 +86,8 @@ Build the ``OnboardingFacts`` payload at ``/mnt/user-data/workspace/onboarding_f
 
   - ``tenant_id`` — the EXACT value at the top of this block ({tenant_id}). Do not parse paths, do not check env, do not guess.
   - ``answers`` — keyed by ``OnboardingQuestion.id``.
-  - ``imported`` — ``{{doctype: [{{name, ...}}]}}`` of created records.
-  - ``open_questions`` — list of ``{{question, candidates}}`` for failed imports / ambiguous columns.
+  - ``imported`` — typically ``{{}}`` here; only populate if a phase-2 step actually created a non-structural record.
+  - ``open_questions`` — list of ``{{question, candidates}}`` for ambiguous answers worth revisiting later.
 
 Then run BOTH compose + write atomically in a single bash command (no commentary between them) so a partial success can't leave inconsistent state:
 
@@ -129,7 +119,6 @@ Final message shape. Use neutral product-facing language — do NOT name the bac
   ✅ 工作空间初始化完成。
   - Company: <name> (<currency>, <country>)
   - Warehouse: <name>
-  - Imported: <N customers, M suppliers, K items, …>
   - Open questions to resolve later: <count>
 
 If you stop early due to AuthError or repeated CLI failure:

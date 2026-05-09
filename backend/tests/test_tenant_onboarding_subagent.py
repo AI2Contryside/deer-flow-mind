@@ -49,7 +49,7 @@ def test_tenant_onboarding_subagent_no_longer_registered() -> None:
 def test_onboarding_prompt_has_all_three_phases() -> None:
     prompt = apply_onboarding_prompt_template(tenant_id="acme-001", tenant_name="Acme Trading Ltd.")
 
-    assert "<phase_1_channel_selection>" in prompt
+    assert "<phase_1_question_plan>" in prompt
     assert "<phase_2_erpnext_seeding>" in prompt
     assert "<phase_3_profile_composition>" in prompt
     assert "<termination>" in prompt
