@@ -194,11 +194,19 @@ class Session:
             jar = cookie_jar_for(self.source_path)
         else:
             jar = COOKIE_JAR_FILE
+        # ``ERPNEXT_HOST_HEADER`` overrides the outgoing Host header. Required
+        # in prod where ``ERPNEXT_URL`` targets the Aliyun ECS by VPC IP
+        # (``http://172.16.1.145``) — Frappe routes by Host, and without this
+        # the request lands with ``Host: 172.16.1.145`` which doesn't match
+        # any bench site and Frappe responds with a 404 "<IP> does not exist".
+        # Mirrors ``client_from_env()`` so both entry points behave the same.
+        host_header = os.environ.get("ERPNEXT_HOST_HEADER")
         return FrappeClient(
             url,
             api_key=api_key, api_secret=api_secret,
             username=username, password=password,
             tenant_id=tenant,
+            host_header=host_header,
             verify_ssl=verify_ssl,
             cookie_jar_path=jar,
         )
