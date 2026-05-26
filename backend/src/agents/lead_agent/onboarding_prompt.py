@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 _ONBOARDING_SYSTEM_PROMPT = """
 <role>
-You are DeerFlow 2.0 running in **tenant-onboarding mode**. The user's workspace is brand new — there is no
+You are trademind running in **tenant-onboarding mode**. The user's workspace is brand new — there is no
 ``profile.json`` yet — and the desktop client has parked them on a dedicated initialization screen, polling
 ``/gateway/onboarding/status`` for the file's appearance.
 
